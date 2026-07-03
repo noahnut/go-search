@@ -34,32 +34,6 @@ type Result struct {
 	Score  float64
 }
 
-type Option func(*Engine)
-
-func WithAnalyzer(a *analysis.Analyzer) Option {
-	return func(e *Engine) {
-		e.analyzer = a
-	}
-}
-
-func WithBM25Params(params scoring.Params) Option {
-	return func(e *Engine) {
-		e.bm25Params = params
-	}
-}
-
-func WithSynonyms(m analysis.SynonymMap) Option {
-	return func(e *Engine) {
-		e.synonyms = m
-	}
-}
-
-func WithLargeDocThreshold(threshold int) Option {
-	return func(e *Engine) {
-		e.largeDocThreshold = threshold
-	}
-}
-
 // Engine is the public SDK. Create one with New, then call Index and Search.
 type Engine struct {
 	index             *index.Index
