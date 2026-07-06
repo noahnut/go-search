@@ -79,10 +79,10 @@ type Engine struct {
 	snapshotDir       string
 	snapshotInterval  time.Duration
 	largeDocThreshold int
+	schema            *Schema
 	bm25Params        scoring.Params
 	synonyms          analysis.SynonymMap
 	docLengths        map[string]int
-	mapping           Mapping
 	mu                sync.RWMutex
 	wg                sync.WaitGroup
 	done              chan struct{}
@@ -96,6 +96,7 @@ func newBase(opts ...Option) *Engine {
 		analyzer:          analysis.NewAnalyzer(&analysis.StandardTokenizer{}),
 		vectors:           make(map[string]map[string][]float64),
 		docLengths:        make(map[string]int),
+		schema:            NewSchema(),
 		largeDocThreshold: DefaultLargeDocThreshold,
 		bm25Params:        scoring.DefaultParams(),
 		synonyms:          analysis.NewSynonymMap(nil),
@@ -153,7 +154,10 @@ func (e *Engine) Index(doc Document) error {
 
 	for fieldName, field := range doc.Fields {
 
-		fm := e.fieldMapping(fieldName)
+		fm, err := e.schema.Resolve(fieldName, field.Value)
+		if err != nil {
+			return err
+		}
 
 		if fm.Type == FieldTypeSkip {
 			continue
@@ -165,7 +169,7 @@ func (e *Engine) Index(doc Document) error {
 
 		if fm.Index {
 			switch fm.Type {
-			case FieldTypeKeyword:
+			case FieldTypeKeyword, FieldTypeInteger, FieldTypeFloat, FieldTypeBoolean:
 				// index the raw value as a single token — no analysis
 				e.index.AddRaw(doc.ID, fieldName, field.Value)
 			case FieldTypeText:
@@ -671,6 +675,10 @@ func (e *Engine) Close() error {
 	return e.docStorage.Close()
 }
 
+func (e *Engine) Schema() *Schema {
+	return e.schema
+}
+
 func (e *Engine) periodicSnapshot() {
 	e.wg.Add(1)
 	go func() {
@@ -688,12 +696,4 @@ func (e *Engine) periodicSnapshot() {
 			}
 		}
 	}()
-}
-
-func (e *Engine) fieldMapping(name string) FieldMapping {
-	if fm, ok := e.mapping[name]; ok {
-		return fm
-	}
-	// dynamic default: text, indexed, stored
-	return FieldMapping{Type: FieldTypeText, Index: true, Store: true}
 }

@@ -11,9 +11,10 @@ import (
 )
 
 type snapshot struct {
-	Docs       map[string]struct{}
-	DocLengths map[string]int
-	BM25Params scoring.Params
+	Docs         map[string]struct{}
+	SchemaFields map[string]FieldMapping
+	DocLengths   map[string]int
+	BM25Params   scoring.Params
 
 	// replace the old flat Postings map with segment data:
 	Segments   []segmentSnapshot
@@ -51,10 +52,11 @@ func (e *Engine) Save(path string) error {
 	}
 
 	data := snapshot{
-		DocLengths: e.docLengths,
-		BM25Params: e.bm25Params,
-		Segments:   segmentSnapshots,
-		Tombstones: tombstones,
+		DocLengths:   e.docLengths,
+		BM25Params:   e.bm25Params,
+		Segments:     segmentSnapshots,
+		Tombstones:   tombstones,
+		SchemaFields: e.schema.Fields(),
 	}
 
 	f, err := os.Create(path)
@@ -100,6 +102,9 @@ func Load(path string, opts ...Option) (*Engine, error) {
 		e.docLengths = make(map[string]int)
 	}
 	e.bm25Params = data.BM25Params
+	for fieldName, fm := range data.SchemaFields {
+		e.schema.Set(fieldName, fm)
+	}
 
 	return e, nil
 }

@@ -59,6 +59,9 @@ func WithSnapshotDir(dir string) Option {
 
 func WithMapping(m Mapping) Option {
 	return func(e *Engine) {
-		e.mapping = m
+		for fieldName, fieldMapping := range m {
+			fieldMapping.Explicit = true
+			e.schema.Set(fieldName, fieldMapping)
+		}
 	}
 }

@@ -19,6 +19,8 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Prefix search / autocomplete** — trie-backed, returns all docs whose terms start with a prefix
 - **Aggregations** — group and count results by field value (faceted search)
 - **Struct tag indexing** — annotate your own structs with `search:` tags; no manual `Document{}` construction
+- **Field mappings** — declare each field as `text` (analyzed), `keyword` (exact match), or `skip` (not indexed); control `index` and `store` independently
+- **Dynamic mapping** — engine infers field types automatically from values; schema is locked on first write and survives snapshots
 - **Large document support** — fields above a configurable threshold are chunked and stored on disk; only byte offsets are kept in memory
 - **Functional options** for custom analyzers, BM25 parameters, synonym maps, and large-doc threshold
 
@@ -229,6 +231,72 @@ Tag reference:
 | `search:"-"` | Skip this field |
 | *(no tag)* | Skip this field |
 
+### Field mappings
+
+Declare how each field should be handled. Fields not in the mapping are inferred
+automatically (see dynamic mapping below).
+
+```go
+e := engine.New(
+    engine.WithMapping(engine.Mapping{
+        "title":    {Type: engine.FieldTypeText,    Index: true,  Store: true},
+        "category": {Type: engine.FieldTypeKeyword, Index: true,  Store: true},
+        "url":      {Type: engine.FieldTypeText,    Index: false, Store: true},  // stored but not searchable
+        "internal": {Type: engine.FieldTypeSkip},                                // not indexed, not stored
+    }),
+)
+```
+
+| Field type | Indexing | Use for |
+|---|---|---|
+| `FieldTypeText` | analyzed (tokenized, lowercased) | body text, titles |
+| `FieldTypeKeyword` | raw value, exact match only | categories, tags, status values |
+| `FieldTypeInteger` | exact match (treated as keyword internally) | numeric IDs, counts |
+| `FieldTypeFloat` | exact match | prices, scores |
+| `FieldTypeBoolean` | exact match for `"true"` / `"false"` | flags |
+| `FieldTypeSkip` | not indexed, not stored | internal metadata |
+
+`Index: false` keeps the value in results but skips the inverted index.
+`Store: false` makes the field searchable but omits it from returned results.
+
+Keyword fields aggregate correctly — all docs with `category: "go"` share the same
+bucket key, unlike text fields where the value is split into tokens.
+
+### Dynamic mapping
+
+With no explicit mapping, the engine infers types from the first value seen for each
+field and locks that type for all subsequent documents:
+
+```go
+e := engine.New() // no WithMapping — fully dynamic
+
+e.Index(engine.Document{ID: "1", Fields: map[string]engine.Field{
+    "title":    {Value: "Go concurrency patterns"}, // → text (has spaces)
+    "category": {Value: "programming"},             // → keyword (short, no spaces)
+    "score":    {Value: "42"},                      // → integer
+    "active":   {Value: "true"},                    // → boolean
+}})
+
+// inspect the inferred schema
+for name, fm := range e.Schema().Fields() {
+    fmt.Printf("%s: %s\n", name, fm.Type)
+}
+```
+
+Inference rules (checked in order):
+
+| Value | Inferred type |
+|---|---|
+| `"true"` / `"false"` | boolean |
+| parseable as integer | integer |
+| parseable as float | float |
+| no spaces and len < 64 | keyword |
+| otherwise | text |
+
+If two documents disagree on an inferred type, the engine promotes to `text`
+(the most general type) rather than erroring. Explicit mappings set via
+`WithMapping` are always authoritative — they are never overridden by inference.
+
 ### Large documents
 
 Fields whose value exceeds the threshold (default 64 KB) are automatically chunked
@@ -327,7 +395,8 @@ query/           boolean query builder and matching logic
 storage/         Storage interface + in-memory implementation
 storage/local/   append-only WAL (Bitcask-style) for document durability
 engine/          public SDK — Index, IndexStruct, Search, FuzzySearch, VectorSearch,
-                              HybridSearch, PrefixSearch, Aggregate, Snapshot, Save/Load
+                              HybridSearch, PrefixSearch, Aggregate, Snapshot, Save/Load,
+                              Schema (field mapping + dynamic type inference)
 ```
 
 ### Query API
