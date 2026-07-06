@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// store opens a fresh store in a temp directory and registers Close for cleanup.
 func store(t *testing.T) *Store {
 	t.Helper()
 	s, err := New(filepath.Join(t.TempDir(), "store.log"))
@@ -18,15 +17,17 @@ func store(t *testing.T) *Store {
 	return s
 }
 
+func val(s string) []byte { return []byte(s) }
+
 // --- Basic operations ---
 
 func TestPutGet(t *testing.T) {
 	s := store(t)
-	if err := s.Put("lang", "go"); err != nil {
+	if err := s.Put("lang", val("go")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	v, ok := s.Get("lang")
-	if !ok || v != "go" {
+	if !ok || string(v) != "go" {
 		t.Errorf("Get('lang'): got %q ok=%v, want 'go' true", v, ok)
 	}
 }
@@ -34,37 +35,36 @@ func TestPutGet(t *testing.T) {
 func TestGet_Missing(t *testing.T) {
 	s := store(t)
 	v, ok := s.Get("missing")
-	if ok || v != "" {
-		t.Errorf("Get missing key: got %q ok=%v, want '' false", v, ok)
+	if ok || v != nil {
+		t.Errorf("Get missing key: got %q ok=%v, want nil false", v, ok)
 	}
 }
 
 func TestPut_Overwrite(t *testing.T) {
 	s := store(t)
-	s.Put("key", "first")
-	s.Put("key", "second")
+	s.Put("key", val("first"))
+	s.Put("key", val("second"))
 
 	v, ok := s.Get("key")
-	if !ok || v != "second" {
+	if !ok || string(v) != "second" {
 		t.Errorf("after overwrite: got %q ok=%v, want 'second' true", v, ok)
 	}
 }
 
 func TestDelete(t *testing.T) {
 	s := store(t)
-	s.Put("key", "value")
+	s.Put("key", val("value"))
 	if err := s.Delete("key"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	v, ok := s.Get("key")
-	if ok || v != "" {
-		t.Errorf("after Delete: got %q ok=%v, want '' false", v, ok)
+	if ok || v != nil {
+		t.Errorf("after Delete: got %q ok=%v, want nil false", v, ok)
 	}
 }
 
 func TestDelete_NonExistent(t *testing.T) {
 	s := store(t)
-	// deleting a key that was never written should not error
 	if err := s.Delete("ghost"); err != nil {
 		t.Errorf("Delete non-existent key: %v", err)
 	}
@@ -81,9 +81,9 @@ func TestSize_Empty(t *testing.T) {
 
 func TestSize_LiveKeys(t *testing.T) {
 	s := store(t)
-	s.Put("a", "1")
-	s.Put("b", "2")
-	s.Put("c", "3")
+	s.Put("a", val("1"))
+	s.Put("b", val("2"))
+	s.Put("c", val("3"))
 	if n := s.Size(); n != 3 {
 		t.Errorf("Size after 3 puts: got %d, want 3", n)
 	}
@@ -91,8 +91,8 @@ func TestSize_LiveKeys(t *testing.T) {
 
 func TestSize_AfterOverwrite(t *testing.T) {
 	s := store(t)
-	s.Put("a", "1")
-	s.Put("a", "2") // overwrite — still 1 live key
+	s.Put("a", val("1"))
+	s.Put("a", val("2"))
 	if n := s.Size(); n != 1 {
 		t.Errorf("Size after overwrite: got %d, want 1", n)
 	}
@@ -100,8 +100,8 @@ func TestSize_AfterOverwrite(t *testing.T) {
 
 func TestSize_AfterDelete(t *testing.T) {
 	s := store(t)
-	s.Put("a", "1")
-	s.Put("b", "2")
+	s.Put("a", val("1"))
+	s.Put("b", val("2"))
 	s.Delete("a")
 	if n := s.Size(); n != 1 {
 		t.Errorf("Size after delete: got %d, want 1", n)
@@ -112,13 +112,13 @@ func TestSize_AfterDelete(t *testing.T) {
 
 func TestEach_VisitsAllLiveKeys(t *testing.T) {
 	s := store(t)
-	s.Put("a", "1")
-	s.Put("b", "2")
-	s.Put("c", "3")
+	s.Put("a", val("1"))
+	s.Put("b", val("2"))
+	s.Put("c", val("3"))
 	s.Delete("b")
 
 	got := map[string]string{}
-	s.Each(func(k, v string) { got[k] = v })
+	s.Each(func(k string, v []byte) { got[k] = string(v) })
 
 	if len(got) != 2 {
 		t.Errorf("Each: got %d entries, want 2", len(got))
@@ -137,7 +137,7 @@ func TestEach_VisitsAllLiveKeys(t *testing.T) {
 func TestEach_EmptyStore(t *testing.T) {
 	s := store(t)
 	count := 0
-	s.Each(func(k, v string) { count++ })
+	s.Each(func(k string, v []byte) { count++ })
 	if count != 0 {
 		t.Errorf("Each on empty store: called %d times, want 0", count)
 	}
@@ -149,12 +149,11 @@ func TestCrashRecovery_LiveKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.log")
 
 	s, _ := New(path)
-	s.Put("a", "1")
-	s.Put("b", "2")
-	s.Put("c", "3")
+	s.Put("a", val("1"))
+	s.Put("b", val("2"))
+	s.Put("c", val("3"))
 	s.Close()
 
-	// reopen — must replay log and recover all keys
 	s2, err := New(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -163,7 +162,7 @@ func TestCrashRecovery_LiveKeys(t *testing.T) {
 
 	for k, want := range map[string]string{"a": "1", "b": "2", "c": "3"} {
 		v, ok := s2.Get(k)
-		if !ok || v != want {
+		if !ok || string(v) != want {
 			t.Errorf("after recovery Get(%q): got %q ok=%v, want %q true", k, v, ok, want)
 		}
 	}
@@ -173,8 +172,8 @@ func TestCrashRecovery_DeletePersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.log")
 
 	s, _ := New(path)
-	s.Put("a", "1")
-	s.Put("b", "2")
+	s.Put("a", val("1"))
+	s.Put("b", val("2"))
 	s.Delete("a")
 	s.Close()
 
@@ -187,7 +186,7 @@ func TestCrashRecovery_DeletePersists(t *testing.T) {
 	if v, ok := s2.Get("a"); ok {
 		t.Errorf("deleted key 'a' survived recovery: got %q", v)
 	}
-	if v, ok := s2.Get("b"); !ok || v != "2" {
+	if v, ok := s2.Get("b"); !ok || string(v) != "2" {
 		t.Errorf("live key 'b' after recovery: got %q ok=%v, want '2' true", v, ok)
 	}
 }
@@ -196,15 +195,15 @@ func TestCrashRecovery_OverwritePersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.log")
 
 	s, _ := New(path)
-	s.Put("key", "old")
-	s.Put("key", "new")
+	s.Put("key", val("old"))
+	s.Put("key", val("new"))
 	s.Close()
 
 	s2, _ := New(path)
 	defer s2.Close()
 
 	v, ok := s2.Get("key")
-	if !ok || v != "new" {
+	if !ok || string(v) != "new" {
 		t.Errorf("after recovery: got %q ok=%v, want 'new' true", v, ok)
 	}
 	if s2.Size() != 1 {
@@ -214,21 +213,18 @@ func TestCrashRecovery_OverwritePersists(t *testing.T) {
 
 // --- Truncated record ---
 
-// TestTruncatedRecord simulates a crash that truncated the last write mid-record.
-// Recovery must not crash and must return all records written before the truncation.
 func TestTruncatedRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.log")
 
 	s, _ := New(path)
-	s.Put("a", "1")
-	s.Put("b", "2") // this record will be truncated
+	s.Put("a", val("1"))
+	s.Put("b", val("2"))
 	s.Close()
 
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	// lop off the last 4 bytes — corrupts the second record's value
 	if err := os.Truncate(path, fi.Size()-4); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -239,9 +235,8 @@ func TestTruncatedRecord(t *testing.T) {
 	}
 	defer s2.Close()
 
-	// "a" was fully written before the truncated record — must survive
 	v, ok := s2.Get("a")
-	if !ok || v != "1" {
+	if !ok || string(v) != "1" {
 		t.Errorf("key 'a' should survive truncation: got %q ok=%v", v, ok)
 	}
 }
@@ -252,9 +247,8 @@ func TestCompact_ShrinksFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.log")
 	s, _ := New(path)
 
-	// write the same key many times — lots of stale entries
 	for i := 0; i < 100; i++ {
-		s.Put("key", "value")
+		s.Put("key", val("value"))
 	}
 
 	fi, _ := os.Stat(path)
@@ -265,10 +259,8 @@ func TestCompact_ShrinksFile(t *testing.T) {
 	}
 
 	fi, _ = os.Stat(path)
-	sizeAfter := fi.Size()
-
-	if sizeAfter >= sizeBefore {
-		t.Errorf("Compact did not shrink file: before=%d after=%d", sizeBefore, sizeAfter)
+	if fi.Size() >= sizeBefore {
+		t.Errorf("Compact did not shrink file: before=%d after=%d", sizeBefore, fi.Size())
 	}
 }
 
@@ -276,21 +268,20 @@ func TestCompact_LiveKeysIntact(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.log")
 	s, _ := New(path)
 
-	s.Put("a", "1")
-	s.Put("b", "2")
-	s.Put("a", "updated") // overwrite
+	s.Put("a", val("1"))
+	s.Put("b", val("2"))
+	s.Put("a", val("updated"))
 	s.Delete("b")
-	s.Put("c", "3")
+	s.Put("c", val("3"))
 
 	if err := s.Compact(); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
 
-	// live: a=updated, c=3; deleted: b
-	if v, ok := s.Get("a"); !ok || v != "updated" {
+	if v, ok := s.Get("a"); !ok || string(v) != "updated" {
 		t.Errorf("after Compact Get('a'): got %q ok=%v, want 'updated' true", v, ok)
 	}
-	if v, ok := s.Get("c"); !ok || v != "3" {
+	if v, ok := s.Get("c"); !ok || string(v) != "3" {
 		t.Errorf("after Compact Get('c'): got %q ok=%v, want '3' true", v, ok)
 	}
 	if _, ok := s.Get("b"); ok {
@@ -305,8 +296,8 @@ func TestCompact_ThenReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.log")
 	s, _ := New(path)
 
-	s.Put("x", "hello")
-	s.Put("x", "world") // stale
+	s.Put("x", val("hello"))
+	s.Put("x", val("world"))
 	s.Compact()
 	s.Close()
 
@@ -317,7 +308,7 @@ func TestCompact_ThenReopen(t *testing.T) {
 	defer s2.Close()
 
 	v, ok := s2.Get("x")
-	if !ok || v != "world" {
+	if !ok || string(v) != "world" {
 		t.Errorf("after compact+reopen: got %q ok=%v, want 'world' true", v, ok)
 	}
 }
@@ -332,13 +323,11 @@ func TestConcurrent_PutGet(t *testing.T) {
 		wg.Add(2)
 		go func(n int) {
 			defer wg.Done()
-			key := string(rune('a' + n%26))
-			s.Put(key, "v")
+			s.Put(string(rune('a'+n%26)), val("v"))
 		}(i)
 		go func(n int) {
 			defer wg.Done()
-			key := string(rune('a' + n%26))
-			s.Get(key)
+			s.Get(string(rune('a' + n%26)))
 		}(i)
 	}
 	wg.Wait()
@@ -347,7 +336,7 @@ func TestConcurrent_PutGet(t *testing.T) {
 func TestConcurrent_EachDuringWrite(t *testing.T) {
 	s := store(t)
 	for i := 0; i < 10; i++ {
-		s.Put(string(rune('a'+i)), "v")
+		s.Put(string(rune('a'+i)), val("v"))
 	}
 
 	var wg sync.WaitGroup
@@ -356,14 +345,14 @@ func TestConcurrent_EachDuringWrite(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 50; i++ {
-			s.Put("new", "v")
+			s.Put("new", val("v"))
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 10; i++ {
-			s.Each(func(k, v string) {})
+			s.Each(func(k string, v []byte) {})
 		}
 	}()
 

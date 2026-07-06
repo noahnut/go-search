@@ -71,7 +71,7 @@ func New(path string) (*Store, error) {
 }
 
 // Store implements storage.Storage
-func (s *Store) Put(key, value string) error {
+func (s *Store) Put(key string, value []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -99,7 +99,7 @@ func (s *Store) Put(key, value string) error {
 	}
 
 	// Write the value to the file
-	n, err := s.file.WriteString(value)
+	n, err := s.file.Write(value)
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func (s *Store) Put(key, value string) error {
 	return nil
 }
 
-func (s *Store) Get(key string) (string, bool) {
+func (s *Store) Get(key string) ([]byte, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -151,7 +151,7 @@ func (s *Store) Delete(key string) error {
 	return nil
 }
 
-func (s *Store) Each(fn func(key, value string)) {
+func (s *Store) Each(fn func(key string, value []byte)) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -217,7 +217,7 @@ func (s *Store) Compact() error {
 		if _, err := tempFile.WriteString(key); err != nil {
 			return err
 		}
-		if _, err := tempFile.WriteString(value); err != nil {
+		if _, err := tempFile.Write(value); err != nil {
 			return err
 		}
 
@@ -244,6 +244,18 @@ func (s *Store) Compact() error {
 	return nil
 }
 
+func (s *Store) Type() storage.StorageType {
+	return storage.LocalFileStorage
+}
+
+func (s *Store) Has(key string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	_, ok := s.entries[key]
+	return ok
+}
+
 func (s *Store) encodeHeader(header recordHeader) []byte {
 	buf := make([]byte, headerSize)
 
@@ -266,17 +278,17 @@ func (s *Store) decodeHeader(buf []byte) recordHeader {
 	}
 }
 
-func (s *Store) get(key string) (string, bool) {
+func (s *Store) get(key string) ([]byte, bool) {
 	entry, ok := s.entries[key]
 	if !ok {
-		return "", false
+		return nil, false
 	}
 
 	// Read the value from the file using the stored offset and size
 	buf := make([]byte, entry.size)
 	_, err := s.file.ReadAt(buf, entry.offset)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 
 	header := s.decodeHeader(buf[:headerSize])
@@ -285,10 +297,10 @@ func (s *Store) get(key string) (string, bool) {
 	value := buf[valueOffset : valueOffset+int(header.ValLen)]
 
 	if header.Type != typePut {
-		return "", false
+		return nil, false
 	}
 
-	return string(value), true
+	return value, true
 }
 
 func (s *Store) loadEntries() error {

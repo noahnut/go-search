@@ -13,6 +13,10 @@ func newSegment(postings map[string]map[string]Posting, docs map[string]struct{}
 	}
 }
 
+func (s *Segment) Docs() map[string]struct{} {
+	return s.docs
+}
+
 func (s *Segment) lookup(term string) []Posting {
 	postings, ok := s.postings[term]
 	if !ok {
@@ -24,7 +28,6 @@ func (s *Segment) lookup(term string) []Posting {
 	}
 	return postingsList
 }
-
 
 func (s *Segment) terms() []string {
 	allTerms := make([]string, 0, len(s.postings))

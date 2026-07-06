@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/noahfan/go-search/query"
+	"github.com/noahfan/go-search/storage/local"
 )
 
 func tmpFile(t *testing.T) string {
@@ -14,16 +15,26 @@ func tmpFile(t *testing.T) string {
 }
 
 func TestSaveAndLoad_Size(t *testing.T) {
-	e := New()
+	dir := t.TempDir()
+	docsPath := filepath.Join(dir, "docs.log")
+
+	store, _ := local.New(docsPath)
+	e := New(WithDocStorage(store))
 	e.Index(doc("1", "go is fast"))
 	e.Index(doc("2", "python is popular"))
-
 	path := tmpFile(t)
 	if err := e.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	store.Close()
 
-	e2, err := Load(path)
+	store2, err := local.New(docsPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+
+	e2, err := Load(path, WithDocStorage(store2))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -33,16 +44,26 @@ func TestSaveAndLoad_Size(t *testing.T) {
 }
 
 func TestSaveAndLoad_SearchReturnsResults(t *testing.T) {
-	e := New()
+	dir := t.TempDir()
+	docsPath := filepath.Join(dir, "docs.log")
+
+	store, _ := local.New(docsPath)
+	e := New(WithDocStorage(store))
 	e.Index(doc("1", "go is fast"))
 	e.Index(doc("2", "python is popular"))
-
 	path := tmpFile(t)
 	if err := e.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	store.Close()
 
-	e2, err := Load(path)
+	store2, err := local.New(docsPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+
+	e2, err := Load(path, WithDocStorage(store2))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -58,7 +79,11 @@ func TestSaveAndLoad_SearchReturnsResults(t *testing.T) {
 }
 
 func TestSaveAndLoad_ScoresMatch(t *testing.T) {
-	e := New()
+	dir := t.TempDir()
+	docsPath := filepath.Join(dir, "docs.log")
+
+	store, _ := local.New(docsPath)
+	e := New(WithDocStorage(store))
 	e.Index(doc("1", "go go go"))
 	e.Index(doc("2", "go is fast"))
 
@@ -69,8 +94,15 @@ func TestSaveAndLoad_ScoresMatch(t *testing.T) {
 	if err := e.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	store.Close()
 
-	e2, err := Load(path)
+	store2, err := local.New(docsPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+
+	e2, err := Load(path, WithDocStorage(store2))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -97,17 +129,27 @@ func TestLoad_FileNotFound(t *testing.T) {
 }
 
 func TestSaveAndLoad_OriginalGone(t *testing.T) {
+	dir := t.TempDir()
+	docsPath := filepath.Join(dir, "docs.log")
 	path := tmpFile(t)
 
 	func() {
-		e := New()
+		store, _ := local.New(docsPath)
+		defer store.Close()
+		e := New(WithDocStorage(store))
 		e.Index(doc("1", "go is fast"))
 		if err := e.Save(path); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
 	}()
 
-	e2, err := Load(path)
+	store2, err := local.New(docsPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+
+	e2, err := Load(path, WithDocStorage(store2))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -117,21 +159,30 @@ func TestSaveAndLoad_OriginalGone(t *testing.T) {
 }
 
 func TestSaveAndLoad_IndexAfterLoad(t *testing.T) {
-	e := New()
-	e.Index(doc("1", "go is fast"))
+	dir := t.TempDir()
+	docsPath := filepath.Join(dir, "docs.log")
 
+	store, _ := local.New(docsPath)
+	e := New(WithDocStorage(store))
+	e.Index(doc("1", "go is fast"))
 	path := tmpFile(t)
 	if err := e.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	store.Close()
 
-	e2, err := Load(path)
+	store2, err := local.New(docsPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+
+	e2, err := Load(path, WithDocStorage(store2))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	err = e2.Index(doc("2", "rust is safe"))
-	if err != nil {
+	if err := e2.Index(doc("2", "rust is safe")); err != nil {
 		t.Fatalf("Index after load: %v", err)
 	}
 	if e2.Size() != 2 {

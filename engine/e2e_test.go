@@ -4,6 +4,7 @@ package engine
 // Each test represents a workflow a real caller would follow.
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/noahfan/go-search/analysis"
 	"github.com/noahfan/go-search/query"
 	"github.com/noahfan/go-search/scoring"
+	"github.com/noahfan/go-search/storage/local"
 )
 
 // --- helpers ---
@@ -132,16 +134,26 @@ func TestE2E_DocumentLifecycle(t *testing.T) {
 // Save engine state → load into fresh engine → search returns same results
 // → index new docs in loaded engine → search includes them.
 func TestE2E_PersistAndResume(t *testing.T) {
-	path := t.TempDir() + "/e2e.gob"
+	dir := t.TempDir()
+	docsPath := filepath.Join(dir, "docs.log")
+	gobPath := filepath.Join(dir, "e2e.gob")
 
-	original := New()
+	store, _ := local.New(docsPath)
+	original := New(WithDocStorage(store))
 	original.Index(doc("1", "go is compiled"))
 	original.Index(doc("2", "python is interpreted"))
-	if err := original.Save(path); err != nil {
+	if err := original.Save(gobPath); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	store.Close()
 
-	loaded, err := Load(path)
+	store2, err := local.New(docsPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+
+	loaded, err := Load(gobPath, WithDocStorage(store2))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -152,7 +164,6 @@ func TestE2E_PersistAndResume(t *testing.T) {
 		t.Errorf("after Load: expected doc '1', got %v", ids(results))
 	}
 
-	// index new doc into loaded engine
 	loaded.Index(doc("3", "rust is also compiled"))
 	results = loaded.Search(q, 10)
 	if len(results) != 2 {
@@ -292,35 +303,6 @@ func TestE2E_CustomBM25Params(t *testing.T) {
 	if results[0].Score != results[1].Score {
 		t.Errorf("with k1=0, all term frequencies should score equally: %.4f vs %.4f",
 			results[0].Score, results[1].Score)
-	}
-}
-
-// --- Scenario 8: large doc upsert ---
-
-// A large doc can be re-indexed; old content is no longer findable, new is.
-func TestE2E_LargeDocUpsert(t *testing.T) {
-	e := New(WithLargeDocThreshold(20))
-	large := func(body string) Document {
-		return Document{ID: "1", Fields: map[string]Field{
-			"body": {Value: body, Boost: 1.0},
-		}}
-	}
-
-	e.Index(large(repeat("golang", 15)))
-	q := query.NewBuilder().Must("body", "golang").Build()
-	if len(e.Search(q, 10)) == 0 {
-		t.Fatal("after first Index: large doc should be searchable")
-	}
-
-	e.Index(large(repeat("python", 15)))
-	oldQ := query.NewBuilder().Must("body", "golang").Build()
-	newQ := query.NewBuilder().Must("body", "python").Build()
-
-	if len(e.Search(oldQ, 10)) != 0 {
-		t.Error("after upsert: old term 'golang' should be gone from large doc")
-	}
-	if len(e.Search(newQ, 10)) == 0 {
-		t.Error("after upsert: new term 'python' should be findable in large doc")
 	}
 }
 

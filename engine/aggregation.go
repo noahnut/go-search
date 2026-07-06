@@ -25,11 +25,17 @@ func (e *Engine) Aggregate(q query.Query, field string, topK int) AggResult {
 	bucketCounts := make(map[string]int)
 	if len(q.Clauses) == 0 {
 		e.mu.RLock()
-		for _, d := range e.docs {
-			if f, ok := d.Fields[field]; ok {
+
+		e.docStorage.Each(func(docID string, rawDocument []byte) {
+			var doc Document
+			if err := doc.UnmarshalJSON(rawDocument); err != nil {
+				return
+			}
+
+			if f, ok := doc.Fields[field]; ok {
 				bucketCounts[f.Value]++
 			}
-		}
+		})
 		e.mu.RUnlock()
 	} else {
 		for _, r := range e.Search(q, 0) {

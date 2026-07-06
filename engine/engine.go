@@ -1,31 +1,67 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/noahfan/go-search/analysis"
 	"github.com/noahfan/go-search/index"
 	"github.com/noahfan/go-search/query"
 	"github.com/noahfan/go-search/scoring"
+	"github.com/noahfan/go-search/storage"
+	"github.com/noahfan/go-search/storage/memory"
 )
 
 const DefaultLargeDocThreshold = 64 * 1024 // 64 KB
+const SnapshotFileName = "snapshot.gob"
 
 type Field struct {
-	Value  string
-	Boost  float64   // score multiplier, 1.0 = no boost
-	Vector []float64 // optional vector representation for semantic search
+	Value  string    `json:"value"`
+	Boost  float64   `json:"boost"`  // score multiplier, 1.0 = no boost
+	Vector []float64 `json:"vector"` // optional vector representation for semantic search
 }
 
 type Document struct {
-	ID     string
-	Fields map[string]Field // e.g. "title", "body", "tags"
+	ID     string           `json:"id"`
+	Fields map[string]Field `json:"fields"` // e.g. "title", "body", "tags"
+}
+
+func (d Document) MarshalJSON() ([]byte, error) {
+	type Alias Document
+	fields := make(map[string]Field)
+	for k, v := range d.Fields {
+		fields[k] = v
+	}
+
+	return json.Marshal(&struct {
+		ID     string           `json:"id"`
+		Fields map[string]Field `json:"fields"`
+	}{
+		ID:     d.ID,
+		Fields: fields,
+	})
+}
+
+func (d *Document) UnmarshalJSON(data []byte) error {
+	type Alias Document
+	aux := &struct {
+		*Alias
+	}{
+		Alias: (*Alias)(d),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	return nil
 }
 
 type Result struct {
@@ -38,32 +74,62 @@ type Result struct {
 type Engine struct {
 	index             *index.Index
 	analyzer          *analysis.Analyzer
-	docs              map[string]Document             // stores original text for results
-	dataStore         *DocStore                       // stores large field chunks
+	docStorage        storage.Storage                 // key-value storage for large documents
 	vectors           map[string]map[string][]float64 // docID → fieldName → vector
+	snapshotDir       string
+	snapshotInterval  time.Duration
 	largeDocThreshold int
 	bm25Params        scoring.Params
 	synonyms          analysis.SynonymMap
 	docLengths        map[string]int
 	mu                sync.RWMutex
+	wg                sync.WaitGroup
+	done              chan struct{}
 }
 
-func New(opts ...Option) *Engine {
+// newBase creates the engine struct and applies options without any startup recovery.
+// Used by both New and Load to avoid recursive snapshot loading.
+func newBase(opts ...Option) *Engine {
 	e := &Engine{
 		index:             index.New(),
 		analyzer:          analysis.NewAnalyzer(&analysis.StandardTokenizer{}),
 		vectors:           make(map[string]map[string][]float64),
-		docs:              make(map[string]Document),
 		docLengths:        make(map[string]int),
-		dataStore:         NewDocStore(),
 		largeDocThreshold: DefaultLargeDocThreshold,
 		bm25Params:        scoring.DefaultParams(),
 		synonyms:          analysis.NewSynonymMap(nil),
 		mu:                sync.RWMutex{},
+		done:              make(chan struct{}),
 	}
-
 	for _, opt := range opts {
 		opt(e)
+	}
+	if e.docStorage == nil {
+		e.docStorage = memory.New()
+	}
+	return e
+}
+
+func New(opts ...Option) *Engine {
+	e := newBase(opts...)
+
+	if e.docStorage.Type() == storage.LocalFileStorage {
+		if e.snapshotDir != "" {
+			snapShotFile := filepath.Join(e.snapshotDir, SnapshotFileName)
+			if _, err := os.Stat(snapShotFile); err == nil {
+				if loaded, err := Load(snapShotFile, opts...); err == nil {
+					e = loaded
+				}
+			}
+		}
+		// re-index all docs not already in the snapshot (or everything if no snapshot)
+		if err := e.recoverDelta(); err != nil {
+			fmt.Printf("Error recovering delta: %v\n", err)
+		}
+	}
+
+	if e.snapshotDir != "" && e.snapshotInterval > 0 {
+		e.periodicSnapshot()
 	}
 
 	return e
@@ -77,12 +143,9 @@ func (e *Engine) Index(doc Document) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if _, ok := e.docs[doc.ID]; ok {
+	if e.docStorage.Has(doc.ID) {
 		e.index.Delete(doc.ID)
-		for _, chunk := range e.dataStore.ChunksFor(doc.ID) {
-			e.index.Delete(chunk.ChunkID)
-		}
-		e.dataStore.DeleteParent(doc.ID)
+		e.docStorage.Delete(doc.ID)
 	}
 
 	tempDocument := Document{ID: doc.ID, Fields: make(map[string]Field)}
@@ -96,40 +159,18 @@ func (e *Engine) Index(doc Document) error {
 			e.vectors[doc.ID][fieldName] = field.Vector
 		}
 
-		if len(field.Value) > e.largeDocThreshold {
-			chunks := e.splitIntoChunks(field.Value, 200, 20)
-			path, err := e.writeToTempFile(field.Value)
-			if err != nil {
-				return err
-			}
-
-			for i, chunk := range chunks {
-				chunkID := e.getChunkFileName(doc.ID, fieldName, i)
-				e.index.Add(chunkID, chunk.value, &fieldName, e.analyzer)
-				e.docLengths[chunkID] = len(e.analyzer.Analyze(chunk.value))
-				e.dataStore.PutChunk(ChunkMeta{
-					ChunkID:  chunkID,
-					ParentID: doc.ID,
-					Field:    fieldName,
-					Meta: FieldMeta{
-						FilePath: path,
-						Offset:   chunk.offset,
-						Length:   chunk.length,
-						Boost:    field.Boost,
-					},
-				})
-
-			}
-
-		} else {
-			tempDocument.Fields[fieldName] = field
-			e.index.Add(doc.ID, field.Value, &fieldName, e.analyzer)
-			e.docLengths[doc.ID+":"+fieldName] += len(e.analyzer.Analyze(field.Value))
-		}
-
+		tempDocument.Fields[fieldName] = field
+		e.index.Add(doc.ID, field.Value, &fieldName, e.analyzer)
+		e.docLengths[doc.ID+":"+fieldName] += len(e.analyzer.Analyze(field.Value))
 	}
 
-	e.docs[doc.ID] = tempDocument
+	documentJSON, err := json.Marshal(tempDocument)
+
+	if err != nil {
+		return err
+	}
+
+	e.docStorage.Put(doc.ID, documentJSON) // store an empty value to indicate the doc exists
 
 	return nil
 }
@@ -199,11 +240,17 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 
 		resolvedDocID := docID
 
-		if parentID, ok := e.dataStore.ParentOf(docID); ok {
-			resolvedDocID = parentID
+		totalScore := 0.0
+
+		document, exists := e.docStorage.Get(resolvedDocID)
+		if !exists {
+			continue
 		}
 
-		totalScore := 0.0
+		var doc Document
+		if err := doc.UnmarshalJSON(document); err != nil {
+			continue
+		}
 
 		for _, clause := range q.Clauses {
 
@@ -214,6 +261,7 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 			if !ok {
 				continue
 			}
+
 			totalScore += scoring.Score(
 				float64(postings[clause.Field+":"+clause.Term].Frequency),
 				e.docLengths[resolvedDocID+":"+clause.Field],
@@ -221,12 +269,12 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 				e.index.DocCount(),
 				len(e.index.Lookup(clause.Field+":"+clause.Term)),
 				e.bm25Params,
-				e.docs[resolvedDocID].Fields[clause.Field].Boost,
+				doc.Fields[clause.Field].Boost,
 			)
 		}
 
 		if existing, ok := seen[resolvedDocID]; !ok || totalScore > existing.Score {
-			seen[resolvedDocID] = Result{ID: resolvedDocID, Fields: e.docs[resolvedDocID].Fields, Score: totalScore}
+			seen[resolvedDocID] = Result{ID: resolvedDocID, Fields: doc.Fields, Score: totalScore}
 		}
 	}
 
@@ -253,17 +301,20 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 func (e *Engine) Delete(id string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	delete(e.docs, id)
-	delete(e.docLengths, id)
+	for k := range e.docLengths {
+		if strings.HasPrefix(k, id+":") {
+			delete(e.docLengths, k)
+		}
+	}
 	e.index.Delete(id)
-	e.dataStore.DeleteParent(id)
+	e.docStorage.Delete(id)
 }
 
 // Size returns the number of indexed documents.
 func (e *Engine) Size() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return len(e.docs)
+	return e.docStorage.Size()
 }
 
 // FuzzySearch finds all indexed terms within maxDistance of the query term
@@ -302,8 +353,16 @@ func (e *Engine) FuzzySearch(field, term string, maxDistance int, topK int) []Re
 
 			for _, post := range indexPositing {
 				resolvedID := post.DocID
-				if parentID, ok := e.dataStore.ParentOf(post.DocID); ok {
-					resolvedID = parentID
+
+				rawDocument, exists := e.docStorage.Get(resolvedID) // ensure the document exists
+
+				if !exists {
+					continue
+				}
+
+				var doc Document
+				if err := doc.UnmarshalJSON(rawDocument); err != nil {
+					continue
 				}
 
 				sc := scoring.Score(
@@ -313,11 +372,11 @@ func (e *Engine) FuzzySearch(field, term string, maxDistance int, topK int) []Re
 					e.index.DocCount(),
 					len(e.index.Lookup(field+":"+rawTerm)),
 					e.bm25Params,
-					e.docs[resolvedID].Fields[field].Boost,
+					doc.Fields[field].Boost,
 				)
 
 				if existing, ok := seen[resolvedID]; !ok || sc > existing.Score {
-					seen[resolvedID] = Result{ID: resolvedID, Fields: e.docs[resolvedID].Fields, Score: sc}
+					seen[resolvedID] = Result{ID: resolvedID, Fields: doc.Fields, Score: sc}
 				}
 			}
 		}
@@ -472,14 +531,21 @@ func (e *Engine) PrefixSearch(field, prefix string) []Result {
 		positing := e.index.Lookup(term)
 		for _, post := range positing {
 			resolvedID := post.DocID
-			if parentID, ok := e.dataStore.ParentOf(post.DocID); ok {
-				resolvedID = parentID
-			}
 
 			if duplicateDocIDs[resolvedID] {
 				continue
 			}
 			duplicateDocIDs[resolvedID] = true
+
+			rawDocument, exists := e.docStorage.Get(resolvedID) // ensure the document exists
+			if !exists {
+				continue
+			}
+
+			var doc Document
+			if err := doc.UnmarshalJSON(rawDocument); err != nil {
+				continue
+			}
 
 			sc := scoring.Score(
 				float64(post.Frequency),
@@ -488,10 +554,10 @@ func (e *Engine) PrefixSearch(field, prefix string) []Result {
 				e.index.DocCount(),
 				len(e.index.Lookup(term)),
 				e.bm25Params,
-				e.docs[resolvedID].Fields[field].Boost,
+				doc.Fields[field].Boost,
 			)
 
-			result = append(result, Result{ID: resolvedID, Fields: e.docs[resolvedID].Fields, Score: sc})
+			result = append(result, Result{ID: resolvedID, Fields: doc.Fields, Score: sc})
 		}
 	}
 
@@ -573,4 +639,34 @@ func (e *Engine) IndexStruct(v any) error {
 	}
 
 	return e.Index(doc)
+}
+
+func (e *Engine) Close() error {
+	if e.done != nil {
+		close(e.done)
+	}
+	e.wg.Wait()
+	if err := e.Snapshot(); err != nil {
+		return err
+	}
+	return e.docStorage.Close()
+}
+
+func (e *Engine) periodicSnapshot() {
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		ticker := time.NewTicker(e.snapshotInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := e.Snapshot(); err != nil {
+					fmt.Printf("Error during periodic snapshot: %v\n", err)
+				}
+			case <-e.done:
+				return
+			}
+		}
+	}()
 }

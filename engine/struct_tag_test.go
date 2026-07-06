@@ -72,7 +72,10 @@ func TestIndexStruct_BoostDefaultsToOne(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	doc := e.docs["1"]
+	doc, ok := getDoc(e, "1")
+	if !ok {
+		t.Fatal("document not found in storage")
+	}
 	if doc.Fields["body"].Boost != 1.0 {
 		t.Errorf("expected boost 1.0 for unspecified boost, got %f", doc.Fields["body"].Boost)
 	}
@@ -89,7 +92,7 @@ func TestIndexStruct_SkipDashTag(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	doc := e.docs["1"]
+	doc, _ := getDoc(e, "1")
 	if _, ok := doc.Fields["internal"]; ok {
 		t.Error("field tagged search:\"-\" should not be indexed")
 	}
@@ -102,7 +105,7 @@ func TestIndexStruct_SkipNoTag(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	doc := e.docs["1"]
+	doc, _ := getDoc(e, "1")
 	if _, ok := doc.Fields["notag"]; ok {
 		t.Error("field with no search tag should not be indexed")
 	}

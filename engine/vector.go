@@ -34,7 +34,11 @@ func (e *Engine) VectorSearch(field string, queryVector []float64, topK int) []R
 
 	result := make([]Result, 0)
 
-	for docID, doc := range e.docs {
+	e.docStorage.Each(func(docID string, rawDocument []byte) {
+		var doc Document
+		if err := doc.UnmarshalJSON(rawDocument); err != nil {
+			return
+		}
 		if docVector, ok := e.vectors[docID][field]; ok {
 			score := CosineSimilarity(queryVector, docVector)
 			if score > 0 {
@@ -45,7 +49,7 @@ func (e *Engine) VectorSearch(field string, queryVector []float64, topK int) []R
 				})
 			}
 		}
-	}
+	})
 
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Score > result[j].Score

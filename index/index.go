@@ -286,3 +286,10 @@ func (idx *Index) PrefixSearch(prefix string) []string {
 
 	return idx.trie.Search(prefix)
 }
+
+func (idx *Index) Segments() []*Segment {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	return idx.segments
+}

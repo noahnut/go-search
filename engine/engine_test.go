@@ -55,6 +55,19 @@ func doc(id, body string) Document {
 	}
 }
 
+// getDoc fetches a stored document from the engine's docStorage.
+func getDoc(e *Engine, id string) (Document, bool) {
+	raw, ok := e.docStorage.Get(id)
+	if !ok {
+		return Document{}, false
+	}
+	var d Document
+	if err := d.UnmarshalJSON(raw); err != nil {
+		return Document{}, false
+	}
+	return d, true
+}
+
 func TestEngine_Index_EmptyID(t *testing.T) {
 	e := New()
 	err := e.Index(Document{ID: ""})
