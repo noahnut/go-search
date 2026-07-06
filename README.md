@@ -15,7 +15,7 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Segment-based index** with O(1) deletes via tombstones
 - **Concurrent segment search** — immutable segments searched in parallel
 - **Segment merging** — collapse segments and permanently drop deleted documents
-- **Persistence** — save and load index state to disk with `encoding/gob`
+- **Persistence** — append-only WAL for document durability; gob snapshots for fast startup; automatic delta recovery on restart
 - **Prefix search / autocomplete** — trie-backed, returns all docs whose terms start with a prefix
 - **Aggregations** — group and count results by field value (faceted search)
 - **Struct tag indexing** — annotate your own structs with `search:` tags; no manual `Document{}` construction
@@ -257,21 +257,77 @@ results := e.Search(query.NewBuilder().Must("body", "napoleon").Build(), 10)
 
 ### Persistence
 
+By default the engine is in-memory and state is lost when the process exits.
+For durability, wire up a local document store and optionally a snapshot directory.
+
+**Document store (WAL)**
+
+The document store is an append-only log that survives restarts. On startup the
+engine replays it to rebuild the inverted index automatically.
+
+```go
+import "github.com/noahfan/go-search/storage/local"
+
+store, err := local.New("data/docs.log")
+if err != nil { ... }
+
+e := engine.New(engine.WithDocStorage(store))
+// Index, Search, Delete — as normal
+e.Close() // flushes and closes the log
+```
+
+On the next run, pass the same path and the engine restores all documents:
+
+```go
+store, err := local.New("data/docs.log")
+e := engine.New(engine.WithDocStorage(store)) // index rebuilt from log automatically
+```
+
+**Snapshots (faster startup)**
+
+For large indexes, replaying the full WAL on every startup is slow. Snapshots
+capture the inverted index at a point in time so startup only replays the delta
+(documents written after the last snapshot).
+
+```go
+store, err := local.New("data/docs.log")
+e := engine.New(
+    engine.WithDocStorage(store),
+    engine.WithSnapshotDir("data/snapshots"),          // where to write snapshot.gob
+    engine.WithSnapshotInterval(5 * time.Minute),      // optional: snapshot on a timer
+)
+
+// Manual snapshot
+err = e.Snapshot()
+
+// Close triggers a final snapshot automatically
+err = e.Close()
+```
+
+On restart, the engine loads the snapshot and re-indexes only the documents that
+arrived after it was taken — the delta is recovered from the WAL.
+
+**Low-level save / load**
+
+For one-off serialization (backups, offline loading) without a running WAL:
+
 ```go
 err := e.Save("/path/to/index.gob")
 
-e, err := engine.Load("/path/to/index.gob")
+e, err := engine.Load("/path/to/index.gob", engine.WithDocStorage(store))
 ```
 
 ## Architecture
 
 ```
-analysis/   tokenizer + filters + analyzer pipeline + synonym maps
-index/      segment-based inverted index (term → posting list) + trie for prefix search
-scoring/    BM25 relevance ranking
-query/      boolean query builder and matching logic
-engine/     public SDK — Index, IndexStruct, Search, FuzzySearch, VectorSearch,
-                         HybridSearch, PrefixSearch, Aggregate, Save/Load
+analysis/        tokenizer + filters + analyzer pipeline + synonym maps
+index/           segment-based inverted index (term → posting list) + trie for prefix search
+scoring/         BM25 relevance ranking
+query/           boolean query builder and matching logic
+storage/         Storage interface + in-memory implementation
+storage/local/   append-only WAL (Bitcask-style) for document durability
+engine/          public SDK — Index, IndexStruct, Search, FuzzySearch, VectorSearch,
+                              HybridSearch, PrefixSearch, Aggregate, Snapshot, Save/Load
 ```
 
 ### Query API

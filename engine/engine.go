@@ -82,6 +82,7 @@ type Engine struct {
 	bm25Params        scoring.Params
 	synonyms          analysis.SynonymMap
 	docLengths        map[string]int
+	mapping           Mapping
 	mu                sync.RWMutex
 	wg                sync.WaitGroup
 	done              chan struct{}
@@ -152,6 +153,26 @@ func (e *Engine) Index(doc Document) error {
 
 	for fieldName, field := range doc.Fields {
 
+		fm := e.fieldMapping(fieldName)
+
+		if fm.Type == FieldTypeSkip {
+			continue
+		}
+
+		if fm.Store {
+			tempDocument.Fields[fieldName] = field
+		}
+
+		if fm.Index {
+			switch fm.Type {
+			case FieldTypeKeyword:
+				// index the raw value as a single token — no analysis
+				e.index.AddRaw(doc.ID, fieldName, field.Value)
+			case FieldTypeText:
+				e.index.Add(doc.ID, field.Value, &fieldName, e.analyzer)
+			}
+		}
+
 		if field.Vector != nil {
 			if e.vectors[doc.ID] == nil {
 				e.vectors[doc.ID] = make(map[string][]float64)
@@ -159,8 +180,6 @@ func (e *Engine) Index(doc Document) error {
 			e.vectors[doc.ID][fieldName] = field.Vector
 		}
 
-		tempDocument.Fields[fieldName] = field
-		e.index.Add(doc.ID, field.Value, &fieldName, e.analyzer)
 		e.docLengths[doc.ID+":"+fieldName] += len(e.analyzer.Analyze(field.Value))
 	}
 
@@ -669,4 +688,12 @@ func (e *Engine) periodicSnapshot() {
 			}
 		}
 	}()
+}
+
+func (e *Engine) fieldMapping(name string) FieldMapping {
+	if fm, ok := e.mapping[name]; ok {
+		return fm
+	}
+	// dynamic default: text, indexed, stored
+	return FieldMapping{Type: FieldTypeText, Index: true, Store: true}
 }

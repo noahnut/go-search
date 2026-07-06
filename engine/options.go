@@ -56,3 +56,9 @@ func WithSnapshotDir(dir string) Option {
 		e.snapshotDir = dir
 	}
 }
+
+func WithMapping(m Mapping) Option {
+	return func(e *Engine) {
+		e.mapping = m
+	}
+}

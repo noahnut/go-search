@@ -64,19 +64,7 @@ func (idx *Index) Add(docID string, text string, fieldName *string, analyzer *an
 	// tokenize the text
 	tokens := analyzer.Analyze(text)
 
-	_, wasTombstoned := idx.tombstones[docID]
-	delete(idx.tombstones, docID)
-
-	if wasTombstoned {
-		if _, inBuffer := idx.bufferDocs[docID]; inBuffer {
-			for term, docPostings := range idx.buffer {
-				delete(docPostings, docID)
-				if len(docPostings) == 0 {
-					delete(idx.buffer, term)
-				}
-			}
-		}
-	}
+	idx.clearTombstone(docID)
 
 	for _, token := range tokens {
 
@@ -102,6 +90,35 @@ func (idx *Index) Add(docID string, text string, fieldName *string, analyzer *an
 		posting.Positions = append(posting.Positions, token.Position)
 		idx.buffer[token.Term][docID] = posting
 	}
+
+	idx.bufferDocs[docID] = struct{}{}
+	idx.docCount++
+
+	if len(idx.bufferDocs) >= idx.flushSize {
+		idx.Flush()
+	}
+}
+
+func (idx *Index) AddRaw(docID string, fieldName string, fieldValue string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	idx.clearTombstone(docID)
+
+	term := fieldName + ":" + fieldValue
+	idx.trie.Insert(term)
+
+	if _, exists := idx.buffer[term]; !exists {
+		idx.buffer[term] = make(map[string]Posting)
+	}
+
+	posting, exists := idx.buffer[term][docID]
+	if !exists {
+		posting = Posting{DocID: docID}
+	}
+	posting.Frequency++
+	posting.Positions = append(posting.Positions, 0) // single token, always position 0
+	idx.buffer[term][docID] = posting
 
 	idx.bufferDocs[docID] = struct{}{}
 	idx.docCount++
@@ -292,4 +309,20 @@ func (idx *Index) Segments() []*Segment {
 	defer idx.mu.RUnlock()
 
 	return idx.segments
+}
+
+func (idx *Index) clearTombstone(docID string) {
+	_, wasTombstoned := idx.tombstones[docID]
+	delete(idx.tombstones, docID)
+
+	if wasTombstoned {
+		if _, inBuffer := idx.bufferDocs[docID]; inBuffer {
+			for term, docPostings := range idx.buffer {
+				delete(docPostings, docID)
+				if len(docPostings) == 0 {
+					delete(idx.buffer, term)
+				}
+			}
+		}
+	}
 }
