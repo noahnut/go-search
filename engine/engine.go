@@ -24,6 +24,9 @@ import (
 const DefaultLargeDocThreshold = 64 * 1024 // 64 KB
 const SnapshotFileName = "snapshot.gob"
 
+const HighlightMarkerOpen = "<em>"
+const HighlightMarkerClose = "</em>"
+
 type Field struct {
 	Value  string    `json:"value"`
 	Boost  float64   `json:"boost"`  // score multiplier, 1.0 = no boost
@@ -65,9 +68,10 @@ func (d *Document) UnmarshalJSON(data []byte) error {
 }
 
 type Result struct {
-	ID     string
-	Fields map[string]Field
-	Score  float64
+	ID         string
+	Fields     map[string]Field
+	Score      float64
+	Highlights []Highlight // ← new; nil when no matches
 }
 
 // Engine is the public SDK. Create one with New, then call Index and Search.
@@ -279,6 +283,8 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 			continue
 		}
 
+		var terms []string
+
 		for _, clause := range q.Clauses {
 
 			if clause.Type == query.MustNot {
@@ -287,6 +293,10 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 			_, ok := postings[clause.Field+":"+clause.Term]
 			if !ok {
 				continue
+			}
+
+			if clause.Type == query.Must || clause.Type == query.Should {
+				terms = append(terms, clause.Term)
 			}
 
 			totalScore += scoring.Score(
@@ -300,8 +310,17 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 			)
 		}
 
+		textFields := make(map[string]Field)
+		for name, field := range doc.Fields {
+			fm, ok := e.schema.Get(name)
+			if !ok || fm.Type == FieldTypeText {
+				textFields[name] = field
+			}
+		}
+
 		if existing, ok := seen[resolvedDocID]; !ok || totalScore > existing.Score {
-			seen[resolvedDocID] = Result{ID: resolvedDocID, Fields: doc.Fields, Score: totalScore}
+			highlights := HighlightDoc(Document{ID: doc.ID, Fields: textFields}, terms, e.analyzer, HighlightMarkerOpen, HighlightMarkerClose)
+			seen[resolvedDocID] = Result{ID: resolvedDocID, Fields: doc.Fields, Score: totalScore, Highlights: highlights}
 		}
 	}
 
