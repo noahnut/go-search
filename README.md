@@ -70,6 +70,8 @@ func main() {
 }
 ```
 
+A runnable file covering all major features is in [`examples/main.go`](examples/main.go).
+
 ## API
 
 ### Engine
@@ -367,6 +369,50 @@ err := e.Save("/path/to/index.gob")
 
 e, err := engine.Load("/path/to/index.gob", engine.WithDocStorage(store))
 ```
+
+### Flush and merge policy
+
+Control when the in-memory write buffer flushes to a segment and when segments are merged.
+
+```go
+import "github.com/noahfan/go-search/index"
+
+e := engine.New(
+    // Flush to a new segment every 50,000 tokens or every second.
+    engine.WithFlushPolicy(index.FlushPolicy{
+        MaxTokens:     50_000,
+        FlushInterval: time.Second,
+    }),
+    // Merge segments in the background whenever there are more than 5.
+    engine.WithMergePolicy(index.MergePolicy{
+        MaxSegments: 5,
+    }),
+)
+```
+
+| Option | Effect | Default |
+|---|---|---|
+| `MaxTokens` | Flush when the buffer holds this many tokens | 128 |
+| `MaxBytes` | Flush when estimated buffer size exceeds this | 1 MB |
+| `FlushInterval` | Flush on a timer regardless of size (0 = off) | off |
+| `MaxSegments` | Trigger background merge above this segment count (0 = off) | 10 |
+
+`MaxTokens` and `MaxBytes` cap memory. `FlushInterval` caps latency — new writes become searchable within the interval. Merging reduces the number of segments searched at query time.
+
+### Reindex
+
+Rebuild the index from scratch without taking the engine offline. Useful when you change the analyzer, add a field mapping, or swap the storage backend.
+
+```go
+// Parallel reindex using 8 workers.
+// The live engine stays searchable during the rebuild.
+err := e.Reindex(8)
+
+// Reindex with a new analyzer — the rebuilt index uses it from the start.
+err = e.Reindex(8, engine.WithAnalyzer(newAnalyzer))
+```
+
+`Reindex` requires a storage backend (`WithDocStorage`) — it returns an error on memory-only engines. Internally it builds a shadow engine and atomically swaps the index state when complete. If it fails partway, the live engine is unchanged.
 
 ## Architecture
 
