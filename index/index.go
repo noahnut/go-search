@@ -2,9 +2,23 @@ package index
 
 import (
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/noahfan/go-search/analysis"
 )
+
+// FlushPolicy controls when the buffer flushes to a segment automatically.
+type FlushPolicy struct {
+	MaxTokens     int           // flush when token count >= this (0 = disabled)
+	MaxBytes      int           // flush when estimated byte size >= this (0 = disabled)
+	FlushInterval time.Duration // flush on a timer regardless of size (0 = disabled)
+}
+
+// MergePolicy controls when background segment merging is triggered.
+type MergePolicy struct {
+	MaxSegments int // trigger background merge when segment count > this (0 = disabled)
+}
 
 // Posting records one occurrence of a term in a document.
 type Posting struct {
@@ -19,40 +33,110 @@ type SegmentData struct {
 	Docs     map[string]struct{}
 }
 
-// Index is an inverted index: maps each term to its list of postings.
-type Index struct {
-	mu         sync.RWMutex
-	trie       *Trie
-	buffer     map[string]map[string]Posting // in-memory write buffer
-	bufferDocs map[string]struct{}
-	segments   []*Segment          // immutable flushed segments
-	tombstones map[string]struct{} // deleted docIDs
-	flushSize  int                 // flush buffer → segment when buffer hits this
-	docCount   int                 // total number of unique documents in the index
-}
+type Option func(*Index)
 
-func New() *Index {
-	return &Index{
-		buffer:     make(map[string]map[string]Posting),
-		bufferDocs: make(map[string]struct{}),
-		segments:   []*Segment{},
-		tombstones: make(map[string]struct{}),
-		trie:       NewTrie(),
-		flushSize:  128,
-		docCount:   0,
+func WithFlushPolicy(p *FlushPolicy) Option {
+	return func(idx *Index) {
+		if p == nil {
+			return
+		}
+		idx.flushPolicy = *p
 	}
 }
 
-// flushSize = 128 by default
+func WithMergePolicy(p *MergePolicy) Option {
+	return func(idx *Index) {
+		if p == nil {
+			return
+		}
+		idx.mergePolicy = *p
+	}
+}
+
+// Index is an inverted index: maps each term to its list of postings.
+type Index struct {
+	mu          sync.RWMutex
+	trie        *Trie
+	buffer      map[string]map[string]Posting // in-memory write buffer
+	bufferDocs  map[string]struct{}
+	segments    []*Segment          // immutable flushed segments
+	tombstones  map[string]struct{} // deleted docIDs
+	flushSize   int                 // flush buffer → segment when buffer hits this
+	flushPolicy FlushPolicy
+	mergePolicy MergePolicy
+	docCount    int          // total number of unique documents in the index
+	tokenCount  int          // total number of tokens in the index
+	merging     atomic.Int32 // 0 = idle, 1 = in progress
+	stopFlush   chan struct{} // closed by StopFlushTimer
+}
+
+// NewWithFlushSize creates an index that flushes every n documents.
+// Used by tests that need deterministic segment boundaries.
 func NewWithFlushSize(n int) *Index {
-	return &Index{
-		buffer:     make(map[string]map[string]Posting),
-		bufferDocs: make(map[string]struct{}),
-		segments:   []*Segment{},
-		tombstones: make(map[string]struct{}),
-		trie:       NewTrie(),
-		flushSize:  n,
-		docCount:   0,
+	idx := New()
+	idx.flushPolicy.MaxTokens = 0 // disable token-based auto-flush
+	idx.flushSize = n
+	return idx
+}
+
+func New(opts ...Option) *Index {
+
+	defaultFlushPolicy := FlushPolicy{
+		MaxTokens:     128,
+		MaxBytes:      1024 * 1024, // 1 MB
+		FlushInterval: 0,           // disabled by default
+	}
+
+	defaultMergePolicy := MergePolicy{
+		MaxSegments: 10, // trigger merge when segment count > 10
+
+	}
+
+	idx := &Index{
+		buffer:      make(map[string]map[string]Posting),
+		bufferDocs:  make(map[string]struct{}),
+		segments:    []*Segment{},
+		tombstones:  make(map[string]struct{}),
+		trie:        NewTrie(),
+		flushPolicy: defaultFlushPolicy,
+		mergePolicy: defaultMergePolicy,
+		docCount:    0,
+		merging:     atomic.Int32{},
+	}
+
+	for _, opt := range opts {
+		opt(idx)
+	}
+
+	if idx.flushPolicy.FlushInterval > 0 {
+		idx.stopFlush = make(chan struct{})
+		go idx.flushOnInterval()
+	}
+
+	return idx
+}
+
+func (idx *Index) flushOnInterval() {
+	ticker := time.NewTicker(idx.flushPolicy.FlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			idx.mu.Lock()
+			if len(idx.bufferDocs) > 0 {
+				idx.Flush()
+				idx.tokenCount = 0
+			}
+			idx.mu.Unlock()
+		case <-idx.stopFlush:
+			return
+		}
+	}
+}
+
+func (idx *Index) StopFlushTimer() {
+	if idx.stopFlush != nil {
+		close(idx.stopFlush)
 	}
 }
 
@@ -89,13 +173,17 @@ func (idx *Index) Add(docID string, text string, fieldName *string, analyzer *an
 		posting.Frequency++
 		posting.Positions = append(posting.Positions, token.Position)
 		idx.buffer[token.Term][docID] = posting
+
+		idx.tokenCount++
 	}
 
 	idx.bufferDocs[docID] = struct{}{}
 	idx.docCount++
 
-	if len(idx.bufferDocs) >= idx.flushSize {
+	if (idx.flushPolicy.MaxTokens > 0 && idx.tokenCount >= idx.flushPolicy.MaxTokens) ||
+		(idx.flushSize > 0 && len(idx.bufferDocs) >= idx.flushSize) {
 		idx.Flush()
+		idx.tokenCount = 0
 	}
 }
 
@@ -122,9 +210,12 @@ func (idx *Index) AddRaw(docID string, fieldName string, fieldValue string) {
 
 	idx.bufferDocs[docID] = struct{}{}
 	idx.docCount++
+	idx.tokenCount++
 
-	if len(idx.bufferDocs) >= idx.flushSize {
+	if (idx.flushPolicy.MaxTokens > 0 && idx.tokenCount >= idx.flushPolicy.MaxTokens) ||
+		(idx.flushSize > 0 && len(idx.bufferDocs) >= idx.flushSize) {
 		idx.Flush()
+		idx.tokenCount = 0
 	}
 }
 
@@ -236,6 +327,15 @@ func (idx *Index) Flush() {
 	idx.segments = append(idx.segments, seg)
 	idx.buffer = make(map[string]map[string]Posting)
 	idx.bufferDocs = make(map[string]struct{})
+
+	if idx.mergePolicy.MaxSegments > 0 && len(idx.segments) > idx.mergePolicy.MaxSegments {
+		if idx.merging.CompareAndSwap(0, 1) {
+			go func() {
+				defer idx.merging.Store(0)
+				idx.Merge()
+			}()
+		}
+	}
 }
 
 func (idx *Index) Snapshot() ([]SegmentData, map[string]struct{}) {
@@ -268,33 +368,48 @@ func (idx *Index) Restore(segs []SegmentData, tombstones map[string]struct{}) {
 	idx.docCount = docCount
 }
 
+// atomic merge
+// 1. set the atomic flag with Merge on process, will block any flush
+// 2. Store all the
 func (idx *Index) Merge() {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
+	// 1. snapshot under read lock (cheap)
+	idx.mu.RLock()
+	segments := idx.segments
+	tombstones := make(map[string]struct{}, len(idx.tombstones))
+	for k := range idx.tombstones {
+		tombstones[k] = struct{}{}
+	}
+	idx.mu.RUnlock()
 
+	// 2. expensive work — no lock held
 	mergedPostings := make(map[string]map[string]Posting)
 	mergedDocs := make(map[string]struct{})
-
-	for _, segment := range idx.segments {
-		for term, docPostings := range segment.postings {
+	for _, seg := range segments {
+		for term, docPostings := range seg.postings {
 			if _, exists := mergedPostings[term]; !exists {
 				mergedPostings[term] = make(map[string]Posting)
 			}
-
 			for docID, posting := range docPostings {
-				if _, deleted := idx.tombstones[docID]; deleted {
+				if _, deleted := tombstones[docID]; deleted {
 					continue
 				}
 				mergedDocs[docID] = struct{}{}
-
 				mergedPostings[term][docID] = posting
 			}
-
 		}
 	}
+	merged := newSegment(mergedPostings, mergedDocs)
 
-	idx.segments = []*Segment{newSegment(mergedPostings, mergedDocs)}
-	idx.tombstones = make(map[string]struct{})
+	// 3. swap under write lock (cheap — O(1))
+	idx.mu.Lock()
+	// segments added DURING merge are at idx.segments[len(segments):]
+	// keep them, only replace the ones we merged
+	idx.segments = append([]*Segment{merged}, idx.segments[len(segments):]...)
+	// only remove tombstones we already applied
+	for id := range tombstones {
+		delete(idx.tombstones, id)
+	}
+	idx.mu.Unlock()
 }
 
 func (idx *Index) PrefixSearch(prefix string) []string {

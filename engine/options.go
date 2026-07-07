@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/noahfan/go-search/analysis"
+	"github.com/noahfan/go-search/index"
 	"github.com/noahfan/go-search/scoring"
 	"github.com/noahfan/go-search/storage"
 )
@@ -63,5 +64,17 @@ func WithMapping(m Mapping) Option {
 			fieldMapping.Explicit = true
 			e.schema.Set(fieldName, fieldMapping)
 		}
+	}
+}
+
+func WithFlushPolicy(p index.FlushPolicy) Option {
+	return func(e *Engine) {
+		e.flushPolicy = &p
+	}
+}
+
+func WithMergePolicy(p index.MergePolicy) Option {
+	return func(e *Engine) {
+		e.mergePolicy = &p
 	}
 }

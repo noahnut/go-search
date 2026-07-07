@@ -82,6 +82,8 @@ type Engine struct {
 	schema            *Schema
 	bm25Params        scoring.Params
 	synonyms          analysis.SynonymMap
+	flushPolicy       *index.FlushPolicy
+	mergePolicy       *index.MergePolicy
 	docLengths        map[string]int
 	mu                sync.RWMutex
 	wg                sync.WaitGroup
@@ -92,7 +94,6 @@ type Engine struct {
 // Used by both New and Load to avoid recursive snapshot loading.
 func newBase(opts ...Option) *Engine {
 	e := &Engine{
-		index:             index.New(),
 		analyzer:          analysis.NewAnalyzer(&analysis.StandardTokenizer{}),
 		vectors:           make(map[string]map[string][]float64),
 		docLengths:        make(map[string]int),
@@ -106,6 +107,9 @@ func newBase(opts ...Option) *Engine {
 	for _, opt := range opts {
 		opt(e)
 	}
+
+	e.index = index.New(index.WithFlushPolicy(e.flushPolicy), index.WithMergePolicy(e.mergePolicy))
+
 	if e.docStorage == nil {
 		e.docStorage = memory.New()
 	}
@@ -677,6 +681,72 @@ func (e *Engine) Close() error {
 
 func (e *Engine) Schema() *Schema {
 	return e.schema
+}
+
+func (e *Engine) Reindex(parallelism int, opts ...Option) error {
+	if e.docStorage.Type() == storage.MemoryStorage {
+		return errors.New("reindex requires a storage backend")
+	}
+
+	// Build into a shadow engine — never touches the live engine.
+	// Carry the current explicit schema so field types stay consistent.
+	shadowOpts := append([]Option{
+		WithDocStorage(e.docStorage),
+		WithMapping(e.schema.Fields()),
+	}, opts...)
+	shadow := newBase(shadowOpts...)
+
+	if err := buildIndex(shadow, e.docStorage, parallelism); err != nil {
+		return err
+	}
+
+	// Atomic swap — searches in flight finish on old state; new ones see shadow.
+	e.mu.Lock()
+	e.index = shadow.index
+	e.docLengths = shadow.docLengths
+	e.schema = shadow.schema
+	e.mu.Unlock()
+
+	return nil
+}
+
+func buildIndex(target *Engine, store storage.Storage, parallelism int) error {
+	type job struct{ raw []byte }
+	jobs := make(chan job, parallelism*2)
+	errc := make(chan error, parallelism)
+
+	var wg sync.WaitGroup
+	for i := 0; i < parallelism; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				var doc Document
+				if err := json.Unmarshal(j.raw, &doc); err != nil {
+					errc <- err
+					return
+				}
+				if err := target.Index(doc); err != nil {
+					errc <- err
+					return
+				}
+			}
+		}()
+	}
+
+	go func() {
+		store.Each(func(_ string, v []byte) { jobs <- job{v} })
+		close(jobs)
+		wg.Wait()
+		close(errc)
+	}()
+
+	for err := range errc {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *Engine) periodicSnapshot() {
