@@ -12,6 +12,7 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Vector search** (semantic / dense retrieval) using cosine similarity
 - **Hybrid search** — combine BM25 and vector scores with a tunable alpha weight
 - **Synonyms** — query-time expansion so "car" finds "automobile" and "vehicle"
+- **Result highlighting** — matched terms wrapped in configurable markers (`<em>…</em>`) per field
 - **Segment-based index** with O(1) deletes via tombstones
 - **Concurrent segment search** — immutable segments searched in parallel
 - **Segment merging** — collapse segments and permanently drop deleted documents
@@ -21,6 +22,7 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Struct tag indexing** — annotate your own structs with `search:` tags; no manual `Document{}` construction
 - **Field mappings** — declare each field as `text` (analyzed), `keyword` (exact match), or `skip` (not indexed); control `index` and `store` independently
 - **Dynamic mapping** — engine infers field types automatically from values; schema is locked on first write and survives snapshots
+- **Stop words** — built-in English preset; extend or replace with custom word lists
 
 ## Installation
 
@@ -189,6 +191,28 @@ trie — O(prefix length) to find all completions.
 ```go
 // finds docs containing "golang", "gold", "golden", etc.
 results := e.PrefixSearch("body", "gol")
+```
+
+### Highlighting
+
+`Search` automatically populates `Result.Highlights` — one entry per field that
+contains a matched query term, with the matching word wrapped in `<em>…</em>`.
+
+```go
+results := e.Search(query.NewBuilder().Must("body", "go").Build(), 10)
+for _, r := range results {
+    for _, h := range r.Highlights {
+        fmt.Printf("field=%s snippet=%s\n", h.Field, h.Snippet)
+        // field=body snippet="<em>Go</em> is a fast compiled language"
+    }
+}
+```
+
+Only `Must` and `Should` terms are highlighted. `MustNot` terms and keyword/numeric
+fields are excluded. To generate highlights with custom markers outside of `Search`:
+
+```go
+highlights := engine.HighlightDoc(doc, []string{"go", "fast"}, analyzer, "**", "**")
 ```
 
 ### Aggregations
@@ -424,8 +448,8 @@ query/           boolean query builder and matching logic
 storage/         Storage interface + in-memory implementation
 storage/local/   append-only WAL (Bitcask-style) for document durability
 engine/          public SDK — Index, IndexStruct, Search, FuzzySearch, VectorSearch,
-                              HybridSearch, PrefixSearch, Aggregate, Schema,
-                              Snapshot, Save, Load, Close
+                              HybridSearch, PrefixSearch, Aggregate, HighlightDoc,
+                              Schema, Reindex, Snapshot, Save, Load, Close
 ```
 
 ### Query API
@@ -456,6 +480,26 @@ e := engine.New(engine.WithAnalyzer(analyzer))
 Available tokenizers: `WhitespaceTokenizer`, `StandardTokenizer`.
 
 Available filters: `LowercaseFilter`, `StopWordFilter`.
+
+**Stop words** — custom list or built-in English preset:
+
+```go
+// Custom list
+analysis.NewStopWordFilter([]string{"the", "is", "a"})
+
+// Built-in English preset (~50 common words: the, a, is, are, and, or, ...)
+analysis.NewEnglishStopWordFilter()
+
+// Extend the preset with domain-specific words
+analysis.NewEnglishStopWordFilter().Add("golang", "python", "rust")
+```
+
+`Add` is case-insensitive and returns the same filter for chaining. Stop word
+construction is also case-insensitive — `NewStopWordFilter(["The", "IS"])` removes
+lowercased tokens `"the"` and `"is"`.
+
+Position numbers of surviving tokens are never renumbered — this preserves phrase
+search correctness when stop words fall between phrase terms.
 
 ### Segment-based index
 
