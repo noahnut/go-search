@@ -283,6 +283,10 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 			continue
 		}
 
+		if passesRangeFilters(doc, q.Ranges) == false {
+			continue
+		}
+
 		var terms []string
 
 		for _, clause := range q.Clauses {
@@ -785,4 +789,30 @@ func (e *Engine) periodicSnapshot() {
 			}
 		}
 	}()
+}
+
+func passesRangeFilters(doc Document, ranges []query.RangeClause) bool {
+	for _, rc := range ranges {
+		field, ok := doc.Fields[rc.Field]
+		if !ok {
+			return false // field absent → exclude
+		}
+		val, err := strconv.ParseFloat(field.Value, 64)
+		if err != nil {
+			return false // non-numeric → exclude
+		}
+		if rc.Gte != nil && val < *rc.Gte {
+			return false
+		}
+		if rc.Lte != nil && val > *rc.Lte {
+			return false
+		}
+		if rc.Gt != nil && val <= *rc.Gt {
+			return false
+		}
+		if rc.Lt != nil && val >= *rc.Lt {
+			return false
+		}
+	}
+	return true
 }
