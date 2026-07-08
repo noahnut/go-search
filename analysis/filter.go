@@ -27,7 +27,7 @@ type StopWordFilter struct {
 func NewStopWordFilter(words []string) *StopWordFilter {
 	wordsMap := make(map[string]struct{})
 	for _, word := range words {
-		wordsMap[word] = struct{}{}
+		wordsMap[strings.ToLower(word)] = struct{}{}
 	}
 	return &StopWordFilter{Words: wordsMap}
 }
@@ -44,4 +44,25 @@ func (f *StopWordFilter) Filter(tokens []Token) []Token {
 		}
 	}
 	return filteredTokens
+}
+
+func NewEnglishStopWordFilter() *StopWordFilter {
+	stopWords := []string{
+		"a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to", "for", "of", "with",
+		"is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+		"did", "will", "would", "could", "should", "may", "might", "shall", "can",
+		"i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they", "their",
+		"this", "that", "these", "those",
+		"not", "no", "nor",
+	}
+
+	return NewStopWordFilter(stopWords)
+}
+
+// Add inserts additional words into an existing filter (returns the same filter for chaining).
+func (f *StopWordFilter) Add(words ...string) *StopWordFilter {
+	for _, word := range words {
+		f.Words[strings.ToLower(word)] = struct{}{}
+	}
+	return f
 }
