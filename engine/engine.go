@@ -27,6 +27,10 @@ const SnapshotFileName = "snapshot.gob"
 const HighlightMarkerOpen = "<em>"
 const HighlightMarkerClose = "</em>"
 
+type SearchOptions struct {
+	Sort []SortClause // if empty, sort by score descending (current behaviour)
+}
+
 type Field struct {
 	Value  string    `json:"value"`
 	Boost  float64   `json:"boost"`  // score multiplier, 1.0 = no boost
@@ -208,7 +212,7 @@ func (e *Engine) Index(doc Document) error {
 
 // Search runs a boolean query and returns results ranked by BM25 score.
 // topK limits the number of results returned.
-func (e *Engine) Search(q query.Query, topK int) []Result {
+func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) []Result {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	candidateDocs := make(map[string]map[string]index.Posting)
@@ -332,9 +336,13 @@ func (e *Engine) Search(q query.Query, topK int) []Result {
 		result = append(result, res)
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Score > result[j].Score
-	})
+	if len(opts) > 0 && len(opts[0].Sort) > 0 {
+		result = e.Sort(result, opts[0])
+	} else {
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Score > result[j].Score
+		})
+	}
 
 	if topK <= 0 {
 		return result
@@ -462,13 +470,14 @@ func (e *Engine) HybridSearch(
 	queryVector []float64,
 	alpha float64,
 	topK int,
+	opts ...SearchOptions,
 ) []Result {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	q = e.expandQueryWithSynonyms(q)
 
-	bm25Results := e.Search(q, 0)
+	bm25Results := e.Search(q, 0, opts...)
 	vectorResults := e.VectorSearch(field, queryVector, 0)
 
 	// Create a map for quick lookup of vector scores by document ID
