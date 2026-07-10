@@ -22,6 +22,11 @@ type RangeClause struct {
 	Lt    *float64 // <  (nil = no exclusive upper bound)
 }
 
+type TermsClause struct {
+	Field  string
+	Values []string
+}
+
 // Clause is one term in a boolean query.
 type Clause struct {
 	Field       string
@@ -33,13 +38,15 @@ type Clause struct {
 // Query is a boolean query with one or more clauses.
 type Query struct {
 	Clauses []Clause
-	Ranges  []RangeClause // ← new; applied as mandatory post-filters
+	Ranges  []RangeClause
+	Terms   []TermsClause
 }
 
 // Builder constructs a Query fluently.
 type Builder struct {
 	clauses []Clause
 	ranges  []RangeClause
+	terms   []TermsClause
 }
 
 func NewBuilder() *Builder {
@@ -69,8 +76,14 @@ func (b *Builder) Range(field string, gte, lte *float64) *Builder {
 	return b
 }
 
+// Terms adds a mandatory multi-value filter: doc must match at least one value.
+func (b *Builder) Terms(field string, values ...string) *Builder {
+	b.terms = append(b.terms, TermsClause{Field: field, Values: values})
+	return b
+}
+
 func (b *Builder) Build() Query {
-	return Query{Clauses: b.clauses, Ranges: b.ranges}
+	return Query{Clauses: b.clauses, Ranges: b.ranges, Terms: b.terms}
 }
 
 func Ptr(v float64) *float64 { return &v }

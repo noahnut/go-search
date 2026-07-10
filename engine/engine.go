@@ -291,6 +291,10 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) []Result
 			continue
 		}
 
+		if passTermsFilters(doc, q.Terms) == false {
+			continue
+		}
+
 		var terms []string
 
 		for _, clause := range q.Clauses {
@@ -821,6 +825,26 @@ func passesRangeFilters(doc Document, ranges []query.RangeClause) bool {
 		}
 		if rc.Lt != nil && val >= *rc.Lt {
 			return false
+		}
+	}
+	return true
+}
+
+func passTermsFilters(doc Document, terms []query.TermsClause) bool {
+	for _, tc := range terms {
+		field, ok := doc.Fields[tc.Field]
+		if !ok {
+			return false // field absent → exclude
+		}
+		matched := false
+		for _, v := range tc.Values {
+			if field.Value == v {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false // none of the values match → exclude
 		}
 	}
 	return true
