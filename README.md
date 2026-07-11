@@ -335,6 +335,26 @@ agg := e.Aggregate(query.NewBuilder().Build(), "language", 10)
 Keyword fields are ideal for aggregations — because they are indexed as a single
 raw token, all docs with `category: "go"` share exactly the same bucket key.
 
+### Metric aggregations
+
+Compute numeric statistics (`min`, `max`, `sum`, `avg`, `count`) over a field
+across all documents that match a query.
+
+```go
+q := query.NewBuilder().Must("body", "laptop").Build()
+res := e.Metrics(q, "price")
+
+fmt.Println(res.Count) // number of matching docs with a numeric price
+fmt.Println(res.Min)   // cheapest
+fmt.Println(res.Max)   // most expensive
+fmt.Println(res.Avg)   // average price
+fmt.Println(res.Sum)   // total revenue
+```
+
+Only documents where the field exists and holds a parseable number are included
+in `Count`. Documents with missing or non-numeric values (e.g. `"N/A"`) are
+silently skipped. When `Count == 0`, all numeric fields are `0`.
+
 ### Struct tag indexing
 
 Annotate your own structs with `search:` tags and call `IndexStruct` — no manual

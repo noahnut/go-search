@@ -2,9 +2,18 @@ package engine
 
 import (
 	"sort"
+	"strconv"
 
 	"github.com/noahfan/go-search/query"
 )
+
+type MetricResult struct {
+	Min   float64
+	Max   float64
+	Sum   float64
+	Avg   float64
+	Count int
+}
 
 // AggResult holds the outcome of one aggregation.
 type AggResult struct {
@@ -59,4 +68,43 @@ func (e *Engine) Aggregate(q query.Query, field string, topK int) AggResult {
 	}
 
 	return AggResult{Buckets: buckets}
+}
+
+// Metrics computes numeric statistics for field across all documents that match q.
+// Only documents where field holds a parseable numeric value are included.
+// If no matching numeric documents exist, Count is 0 and all others are 0.
+func (e *Engine) Metrics(q query.Query, field string) MetricResult {
+	results := e.Search(q, e.Size()) // fetch all matching docs
+
+	var res MetricResult
+	res.Max = -1e308 // initialize to a very small number
+	res.Min = 1e308  // initialize to a very large number
+	for _, r := range results.Hits {
+		v, ok := r.Fields[field]
+		if !ok {
+			continue
+		}
+		f, err := strconv.ParseFloat(v.Value, 64)
+		if err != nil {
+			continue
+		}
+		res.Count++
+		res.Sum += f
+		if f < res.Min {
+			res.Min = f
+		}
+		if f > res.Max {
+			res.Max = f
+		}
+	}
+	if res.Count > 0 {
+		res.Avg = res.Sum / float64(res.Count)
+	}
+
+	if res.Count == 0 {
+		res.Min = 0
+		res.Max = 0
+	}
+
+	return res
 }

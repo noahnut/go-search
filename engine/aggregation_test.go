@@ -168,3 +168,150 @@ func TestAggregate_NoBuckets(t *testing.T) {
 		t.Errorf("query with no results should produce 0 buckets, got %v", agg.Buckets)
 	}
 }
+
+// --- Metrics tests ---
+
+// metricDoc creates a doc with a searchable body and a numeric price field.
+func metricDoc(id, body, price string) Document {
+	return Document{
+		ID: id,
+		Fields: map[string]Field{
+			"body":  {Value: body, Boost: 1.0},
+			"price": {Value: price},
+		},
+	}
+}
+
+func TestMetrics_BasicStats(t *testing.T) {
+	e := New()
+	e.Index(metricDoc("1", "item", "10"))
+	e.Index(metricDoc("2", "item", "20"))
+	e.Index(metricDoc("3", "item", "30"))
+
+	q := query.NewBuilder().Must("body", "item").Build()
+	res := e.Metrics(q, "price")
+
+	if res.Count != 3 {
+		t.Errorf("expected count=3, got %d", res.Count)
+	}
+	if res.Min != 10 {
+		t.Errorf("expected min=10, got %f", res.Min)
+	}
+	if res.Max != 30 {
+		t.Errorf("expected max=30, got %f", res.Max)
+	}
+	if res.Sum != 60 {
+		t.Errorf("expected sum=60, got %f", res.Sum)
+	}
+	if res.Avg != 20 {
+		t.Errorf("expected avg=20, got %f", res.Avg)
+	}
+}
+
+func TestMetrics_NonNumericFieldSkipped(t *testing.T) {
+	e := New()
+	e.Index(metricDoc("1", "item", "10"))
+	e.Index(Document{
+		ID: "2",
+		Fields: map[string]Field{
+			"body":  {Value: "item", Boost: 1.0},
+			"price": {Value: "N/A"}, // non-numeric
+		},
+	})
+
+	q := query.NewBuilder().Must("body", "item").Build()
+	res := e.Metrics(q, "price")
+
+	if res.Count != 1 {
+		t.Errorf("non-numeric value should be excluded from count, got count=%d", res.Count)
+	}
+	if res.Min != 10 || res.Max != 10 {
+		t.Errorf("expected min=max=10, got min=%f max=%f", res.Min, res.Max)
+	}
+}
+
+func TestMetrics_MissingFieldSkipped(t *testing.T) {
+	e := New()
+	e.Index(metricDoc("1", "item", "50"))
+	e.Index(Document{
+		ID:     "2",
+		Fields: map[string]Field{"body": {Value: "item", Boost: 1.0}}, // no price
+	})
+
+	q := query.NewBuilder().Must("body", "item").Build()
+	res := e.Metrics(q, "price")
+
+	if res.Count != 1 {
+		t.Errorf("doc without price field should be excluded, got count=%d", res.Count)
+	}
+}
+
+func TestMetrics_NoMatchingDocs_ZeroResult(t *testing.T) {
+	e := New()
+	e.Index(metricDoc("1", "item", "10"))
+
+	q := query.NewBuilder().Must("body", "missing").Build()
+	res := e.Metrics(q, "price")
+
+	if res.Count != 0 {
+		t.Errorf("expected count=0 for no matches, got %d", res.Count)
+	}
+	if res.Min != 0 || res.Max != 0 || res.Sum != 0 || res.Avg != 0 {
+		t.Errorf("expected all zero for count=0, got min=%f max=%f sum=%f avg=%f", res.Min, res.Max, res.Sum, res.Avg)
+	}
+}
+
+func TestMetrics_SingleDoc(t *testing.T) {
+	e := New()
+	e.Index(metricDoc("1", "item", "42"))
+
+	q := query.NewBuilder().Must("body", "item").Build()
+	res := e.Metrics(q, "price")
+
+	if res.Count != 1 {
+		t.Errorf("expected count=1, got %d", res.Count)
+	}
+	if res.Min != 42 || res.Max != 42 || res.Sum != 42 || res.Avg != 42 {
+		t.Errorf("single doc: all stats should be 42, got min=%f max=%f sum=%f avg=%f", res.Min, res.Max, res.Sum, res.Avg)
+	}
+}
+
+func TestMetrics_FloatValues(t *testing.T) {
+	e := New()
+	e.Index(metricDoc("1", "item", "4.50"))
+	e.Index(metricDoc("2", "item", "9.99"))
+	e.Index(metricDoc("3", "item", "19.99"))
+
+	q := query.NewBuilder().Must("body", "item").Build()
+	res := e.Metrics(q, "price")
+
+	if res.Count != 3 {
+		t.Errorf("expected count=3, got %d", res.Count)
+	}
+	if res.Min != 4.50 {
+		t.Errorf("expected min=4.50, got %f", res.Min)
+	}
+	if res.Max != 19.99 {
+		t.Errorf("expected max=19.99, got %f", res.Max)
+	}
+}
+
+func TestMetrics_SubsetMatchedByQuery(t *testing.T) {
+	e := New()
+	e.Index(metricDoc("1", "laptop", "1000"))
+	e.Index(metricDoc("2", "laptop", "2000"))
+	e.Index(metricDoc("3", "phone", "500")) // won't match
+
+	q := query.NewBuilder().Must("body", "laptop").Build()
+	res := e.Metrics(q, "price")
+
+	if res.Count != 2 {
+		t.Errorf("expected count=2 (only laptop docs), got %d", res.Count)
+	}
+	if res.Min != 1000 || res.Max != 2000 {
+		t.Errorf("expected min=1000 max=2000, got min=%f max=%f", res.Min, res.Max)
+	}
+	if res.Avg != 1500 {
+		t.Errorf("expected avg=1500, got %f", res.Avg)
+	}
+}
