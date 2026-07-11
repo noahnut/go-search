@@ -69,7 +69,7 @@ func TestSaveAndLoad_SearchReturnsResults(t *testing.T) {
 	}
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e2.Search(q, 10)
+	results := e2.Search(q, 10).Hits
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -88,7 +88,7 @@ func TestSaveAndLoad_ScoresMatch(t *testing.T) {
 	e.Index(doc("2", "go is fast"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	original := e.Search(q, 10)
+	original := e.Search(q, 10).Hits
 
 	path := tmpFile(t)
 	if err := e.Save(path); err != nil {
@@ -106,7 +106,7 @@ func TestSaveAndLoad_ScoresMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	loaded := e2.Search(q, 10)
+	loaded := e2.Search(q, 10).Hits
 
 	if len(original) != len(loaded) {
 		t.Fatalf("result count mismatch: original=%d loaded=%d", len(original), len(loaded))

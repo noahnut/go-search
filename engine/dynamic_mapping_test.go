@@ -192,7 +192,7 @@ func TestEngine_InferredConflictPromotesAndIndexes(t *testing.T) {
 
 	// both docs should be searchable after promotion to text
 	q := query.NewBuilder().Must("age", "old").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "2" {
 		t.Errorf("after promotion to text, expected doc '2', got %v", ids(results))
 	}
@@ -206,7 +206,7 @@ func TestEngine_IntegerFieldExactMatch(t *testing.T) {
 	e.Index(Document{ID: "2", Fields: map[string]Field{"score": {Value: "99"}}})
 
 	q := query.NewBuilder().Must("score", "42").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("integer exact match: expected doc '1', got %v", ids(results))
 	}
@@ -218,7 +218,7 @@ func TestEngine_FloatFieldExactMatch(t *testing.T) {
 	e.Index(Document{ID: "2", Fields: map[string]Field{"price": {Value: "9.99"}}})
 
 	q := query.NewBuilder().Must("price", "3.14").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("float exact match: expected doc '1', got %v", ids(results))
 	}
@@ -230,7 +230,7 @@ func TestEngine_BooleanFieldExactMatch(t *testing.T) {
 	e.Index(Document{ID: "2", Fields: map[string]Field{"active": {Value: "false"}}})
 
 	q := query.NewBuilder().Must("active", "true").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("boolean exact match: expected doc '1', got %v", ids(results))
 	}
@@ -242,7 +242,7 @@ func TestEngine_KeywordInferredExactMatch(t *testing.T) {
 	e.Index(Document{ID: "2", Fields: map[string]Field{"status": {Value: "draft"}}})
 
 	q := query.NewBuilder().Must("status", "published").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("inferred keyword: expected doc '1', got %v", ids(results))
 	}

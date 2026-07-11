@@ -25,7 +25,7 @@ func TestHybridSearch_PureBM25(t *testing.T) {
 
 	q := query.NewBuilder().Must("body", "go").Build()
 
-	bm25 := e.Search(q, 10)
+	bm25 := e.Search(q, 10).Hits
 	hybrid := e.HybridSearch(q, "embedding", []float64{1, 0}, 1.0, 10)
 
 	if len(hybrid) != len(bm25) {
@@ -158,7 +158,7 @@ func TestHybridSearch_NormalizationPreventsBM25Dominance(t *testing.T) {
 	q := query.NewBuilder().Must("body", "go").Build()
 	queryVec := []float64{1, 0}
 
-	bm25Results := e.Search(q, 10)
+	bm25Results := e.Search(q, 10).Hits
 	hybridResults := e.HybridSearch(q, "embedding", queryVec, 0.5, 10)
 
 	if len(bm25Results) < 2 || len(hybridResults) < 2 {

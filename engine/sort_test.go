@@ -19,7 +19,7 @@ func priceDoc(id, body, price string) Document {
 
 func searchAll(e *Engine, term string, opts ...SearchOptions) []Result {
 	q := query.NewBuilder().Must("body", term).Build()
-	return e.Search(q, 10, opts...)
+	return e.Search(q, 10, opts...).Hits
 }
 
 // --- compareFieldValues unit tests ---
@@ -128,7 +128,7 @@ func TestSortBy_NoOptions_SortsByScore(t *testing.T) {
 	e.Index(Document{ID: "2", Fields: map[string]Field{"body": {Value: "go go", Boost: 1.0}}})
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -215,7 +215,7 @@ func TestSortBy_CombinedWithRange(t *testing.T) {
 		Range("price", query.Ptr(1), query.Ptr(100)).
 		Build()
 
-	results := e.Search(q, 10, SortBy("price", Asc))
+	results := e.Search(q, 10, SortBy("price", Asc)).Hits
 	got := ids(results)
 
 	if len(got) != 2 {

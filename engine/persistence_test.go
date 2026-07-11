@@ -90,7 +90,7 @@ func TestStartup_DocsSearchableAfterReopen(t *testing.T) {
 	defer store2.Close()
 
 	q := query.NewBuilder().Must("body", "compiled").Build()
-	results := e2.Search(q, 10)
+	results := e2.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("after reopen: expected doc '1', got %v", ids(results))
 	}
@@ -129,7 +129,7 @@ func TestStartup_DeletedDocNotRestoredAfterReopen(t *testing.T) {
 		t.Errorf("deleted doc should not be restored: size=%d", e2.Size())
 	}
 	q := query.NewBuilder().Must("body", "python").Build()
-	if results := e2.Search(q, 10); len(results) != 0 {
+	if results := e2.Search(q, 10).Hits; len(results) != 0 {
 		t.Error("deleted doc should not be searchable after reopen")
 	}
 }
@@ -164,7 +164,7 @@ func TestSnapshot_DeltaRecoveredAfterReopen(t *testing.T) {
 		t.Errorf("expected 3 docs after recovery, got %d", e3.Size())
 	}
 	q := query.NewBuilder().Must("body", "dynamic").Build()
-	results := e3.Search(q, 10)
+	results := e3.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "3" {
 		t.Errorf("delta doc '3' should be searchable after recovery, got %v", ids(results))
 	}
@@ -185,7 +185,7 @@ func TestSnapshot_NoDuplicatesAfterRecovery(t *testing.T) {
 	e2 := New(WithDocStorage(store2), WithSnapshotDir(snapDir))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e2.Search(q, 10)
+	results := e2.Search(q, 10).Hits
 
 	count := 0
 	for _, r := range results {

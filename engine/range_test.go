@@ -158,7 +158,7 @@ func TestRange_InclusiveBounds(t *testing.T) {
 		Range("price", query.Ptr(10), query.Ptr(100)).
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 
 	if len(got) != 3 {
@@ -189,7 +189,7 @@ func TestRange_OpenLowerBound(t *testing.T) {
 		Range("score", query.Ptr(4.5), nil). // score >= 4.5, no upper bound
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 2 {
 		t.Fatalf("expected docs 2 and 3 (score >= 4.5), got %v", got)
@@ -207,7 +207,7 @@ func TestRange_OpenUpperBound(t *testing.T) {
 		Range("price", nil, query.Ptr(10)). // no lower bound, price <= 10
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc 1 (price <= 10), got %v", got)
@@ -225,7 +225,7 @@ func TestRange_CombinedWithMust(t *testing.T) {
 		Range("price", nil, query.Ptr(50)).
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc 1 (body:go AND price<=50), got %v", got)
@@ -242,7 +242,7 @@ func TestRange_ExcludesAll(t *testing.T) {
 		Range("price", nil, query.Ptr(10)).
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 0 {
 		t.Errorf("expected no results, got %v", ids(results))
 	}
@@ -261,7 +261,7 @@ func TestRange_MissingFieldExcludesDoc(t *testing.T) {
 		Range("price", query.Ptr(10), query.Ptr(100)).
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc with price field, got %v", got)
@@ -292,7 +292,7 @@ func TestRange_MultipleRangeClauses(t *testing.T) {
 		Range("score", query.Ptr(4.0), nil).
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc 1 (both ranges satisfied), got %v", got)
@@ -311,7 +311,7 @@ func TestRange_ExclusiveBounds_ViaDirectConstruction(t *testing.T) {
 		Ranges:  []query.RangeClause{{Field: "score", Gt: query.Ptr(5.0)}},
 	}
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "2" {
 		t.Fatalf("expected only doc 2 (score > 5.0 exclusive), got %v", got)

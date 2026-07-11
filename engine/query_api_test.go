@@ -30,7 +30,7 @@ func TestQueryAPI_EngineHandlesFieldPrefix(t *testing.T) {
 
 	// caller writes Must("body", "go") — never "body:go"
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("expected doc '1', got %v", results)
@@ -53,7 +53,7 @@ func TestQueryAPI_MultiField_NoPrefixInCallSite(t *testing.T) {
 		Must("body", "goroutines").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("expected doc '1', got %v", results)
 	}
@@ -65,7 +65,7 @@ func TestQueryAPI_WrongField_NoResults(t *testing.T) {
 
 	// searching the wrong field should return nothing
 	q := query.NewBuilder().Must("title", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 0 {
 		t.Errorf("expected 0 results: 'go' is in body, not title; got %d", len(results))
@@ -82,7 +82,7 @@ func TestQueryAPI_MustNot_TwoArgs(t *testing.T) {
 		MustNot("body", "python").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("expected only doc '1', got %v", results)
 	}
@@ -100,7 +100,7 @@ func TestQueryAPI_Should_TwoArgs(t *testing.T) {
 		Should("body", "rust").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	ids := map[string]bool{}
 	for _, r := range results {
 		ids[r.ID] = true

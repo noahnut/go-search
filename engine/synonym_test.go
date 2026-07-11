@@ -22,7 +22,7 @@ func TestSynonym_BasicExpansion(t *testing.T) {
 	e.Index(doc("2", "python is popular"))
 
 	q := query.NewBuilder().Must("body", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	found := false
 	for _, r := range results {
@@ -42,7 +42,7 @@ func TestSynonym_Symmetric(t *testing.T) {
 	e.Index(doc("2", "python is popular"))
 
 	q := query.NewBuilder().Must("body", "automobile").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	found := false
 	for _, r := range results {
@@ -61,7 +61,7 @@ func TestSynonym_ExactMatchStillWorks(t *testing.T) {
 	e.Index(doc("1", "car is fast"))
 
 	q := query.NewBuilder().Must("body", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) == 0 {
 		t.Error("exact match 'car' should still work when synonyms are configured")
@@ -79,7 +79,7 @@ func TestSynonym_ShouldSemanticsBoostScore(t *testing.T) {
 	e.Index(doc("2", "automobile only"))  // has only the synonym
 
 	q := query.NewBuilder().Must("body", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) < 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -99,7 +99,7 @@ func TestSynonym_MustNotNotExpanded(t *testing.T) {
 		Must("body", "automobile").
 		MustNot("body", "car").
 		Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	// doc1 has "automobile" (must match) and no "car" (must_not safe) → should appear
 	// doc2 has "car" (must_not triggered) → should not appear
@@ -119,7 +119,7 @@ func TestSynonym_PhraseNotExpanded(t *testing.T) {
 
 	// Phrase "fast car" should match doc1 only, not doc2 via synonym
 	q := query.NewBuilder().Phrase("body", "fast", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	for _, r := range results {
 		if r.ID == "2" {
@@ -134,7 +134,7 @@ func TestSynonym_NoSynonymsConfigured(t *testing.T) {
 	e.Index(doc("1", "automobile is fast"))
 
 	q := query.NewBuilder().Must("body", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 0 {
 		t.Error("without synonyms, 'car' should not match 'automobile'")
@@ -149,7 +149,7 @@ func TestSynonym_MultipleSynonyms(t *testing.T) {
 	e.Index(doc("3", "python coding"))
 
 	q := query.NewBuilder().Must("body", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	ids := map[string]bool{}
 	for _, r := range results {
@@ -174,7 +174,7 @@ func TestSynonym_ShouldClauseExpanded(t *testing.T) {
 
 	// should(car) → should(car) + should(automobile) + should(vehicle)
 	q := query.NewBuilder().Should("body", "car").Should("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	ids := map[string]bool{}
 	for _, r := range results {

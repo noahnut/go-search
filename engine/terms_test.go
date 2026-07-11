@@ -115,7 +115,7 @@ func TestTerms_SingleValue(t *testing.T) {
 		Terms("status", "open").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 
 	if len(got) != 2 {
@@ -147,7 +147,7 @@ func TestTerms_MultipleValues(t *testing.T) {
 		Terms("status", "open", "in-progress").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 
 	if len(got) != 2 {
@@ -177,7 +177,7 @@ func TestTerms_ExcludesAll(t *testing.T) {
 		Terms("status", "open").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 0 {
 		t.Errorf("expected no results, got %v", ids(results))
 	}
@@ -196,7 +196,7 @@ func TestTerms_MissingFieldExcludesDoc(t *testing.T) {
 		Terms("status", "open").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc with status field, got %v", got)
@@ -214,7 +214,7 @@ func TestTerms_CombinedWithMust(t *testing.T) {
 		Terms("status", "open").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc 1 (body:go AND status:open), got %v", got)
@@ -245,7 +245,7 @@ func TestTerms_MultipleTermsClauses(t *testing.T) {
 		Terms("priority", "high", "critical").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc 1 (both terms clauses satisfied), got %v", got)
@@ -262,7 +262,7 @@ func TestTerms_SingleValueBehavesLikeMustKeyword(t *testing.T) {
 		Terms("status", "active").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("single-value Terms should behave like a keyword filter, got %v", got)
@@ -293,7 +293,7 @@ func TestTerms_CombinedWithRange(t *testing.T) {
 		Range("price", query.Ptr(1), query.Ptr(100)).
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	got := ids(results)
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("expected only doc 1 (terms AND range satisfied), got %v", got)

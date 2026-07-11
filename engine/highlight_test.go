@@ -149,7 +149,7 @@ func TestSearch_HighlightsPopulated(t *testing.T) {
 	e.Index(doc("1", "Go is a fast compiled language"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -176,7 +176,7 @@ func TestSearch_MustNotTermNotHighlighted(t *testing.T) {
 	// so we need a doc that matches Must but doesn't contain MustNot term.
 	e.Index(doc("2", "Go is a great language"))
 
-	results := e.Search(query.NewBuilder().Must("body", "go").MustNot("body", "python").Build(), 10)
+	results := e.Search(query.NewBuilder().Must("body", "go").MustNot("body", "python").Build(), 10).Hits
 
 	for _, r := range results {
 		for _, h := range r.Highlights {
@@ -195,7 +195,7 @@ func TestSearch_ShouldTermHighlighted(t *testing.T) {
 		Must("body", "go").
 		Should("body", "fast").
 		Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) == 0 {
 		t.Fatal("expected results")
@@ -221,7 +221,7 @@ func TestSearch_KeywordFieldNotHighlighted(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) == 0 {
 		t.Fatal("expected results")
@@ -238,7 +238,7 @@ func TestSearch_NoHighlightsOnNoMatch(t *testing.T) {
 	e.Index(doc("1", "Go is fast"))
 	// Should clause: doc is included even if "fast" isn't there, but still searchable via Must
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) == 0 {
 		t.Fatal("expected results")

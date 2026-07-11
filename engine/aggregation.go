@@ -38,7 +38,7 @@ func (e *Engine) Aggregate(q query.Query, field string, topK int) AggResult {
 		})
 		e.mu.RUnlock()
 	} else {
-		for _, r := range e.Search(q, 0) {
+		for _, r := range e.Search(q, 0).Hits {
 			if f, ok := r.Fields[field]; ok {
 				bucketCounts[f.Value]++
 			}

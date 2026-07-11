@@ -25,7 +25,7 @@ func TestMultiField_SearchByField(t *testing.T) {
 
 	// "go" only in title of doc1
 	q := query.NewBuilder().Must("title", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result for title:go, got %d", len(results))
 	}
@@ -35,7 +35,7 @@ func TestMultiField_SearchByField(t *testing.T) {
 
 	// "go" only in body of doc2
 	q2 := query.NewBuilder().Must("body", "go").Build()
-	results2 := e.Search(q2, 10)
+	results2 := e.Search(q2, 10).Hits
 	if len(results2) != 1 {
 		t.Fatalf("expected 1 result for body:go, got %d", len(results2))
 	}
@@ -65,7 +65,7 @@ func TestMultiField_BoostRanking(t *testing.T) {
 
 	// Both docs have "go", but in different fields with different boosts
 	q := query.NewBuilder().Should("title", "go").Should("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -98,7 +98,7 @@ func TestMultiField_MustAcrossFields(t *testing.T) {
 
 	// must have "go" in title AND "fast" in body
 	q := query.NewBuilder().Must("title", "go").Must("body", "fast").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -114,7 +114,7 @@ func TestMultiField_FieldNotPresent(t *testing.T) {
 	e.Index(doc("1", "go is fast"))
 
 	q := query.NewBuilder().Must("title", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 0 {
 		t.Errorf("expected 0 results: doc has no title field, got %d", len(results))
@@ -132,7 +132,7 @@ func TestMultiField_ResultPreservesFields(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("title", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) == 0 {
 		t.Fatal("expected 1 result")

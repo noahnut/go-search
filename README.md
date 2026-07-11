@@ -22,6 +22,10 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Struct tag indexing** — annotate your own structs with `search:` tags; no manual `Document{}` construction
 - **Field mappings** — declare each field as `text` (analyzed), `keyword` (exact match), or `skip` (not indexed); control `index` and `store` independently
 - **Dynamic mapping** — engine infers field types automatically from values; schema is locked on first write and survives snapshots
+- **Range queries** — filter numeric fields with `>=`, `<=`, `>`, `<` bounds
+- **Terms query** — multi-value exact filter (`WHERE field IN (...)`)
+- **Sorting** — sort results by any field (numeric or string), ascending or descending; BM25 score as tiebreaker
+- **Pagination** — offset (`From`/`Size`) and cursor-based (`SearchAfter`) pagination; `NextCursor` returned with every page
 - **Stop words** — built-in English preset; extend or replace with custom word lists
 
 ## Installation
@@ -65,8 +69,8 @@ func main() {
         MustNot("body", "python").
         Build()
 
-    results := e.Search(q, 10)
-    for _, r := range results {
+    sr := e.Search(q, 10)
+    for _, r := range sr.Hits {
         fmt.Printf("id=%s score=%.4f title=%s\n", r.ID, r.Score, r.Fields["title"].Value)
     }
 }
@@ -113,6 +117,8 @@ n := e.Size()
 
 ### Keyword search
 
+`Search` returns a `SearchResult` with a `Hits []Result` slice and an optional `NextCursor` for pagination.
+
 ```go
 q := query.NewBuilder().
     Must("body", "go").        // MUST contain "go" in body
@@ -120,15 +126,106 @@ q := query.NewBuilder().
     MustNot("body", "python"). // MUST NOT contain "python"
     Build()
 
-results := e.Search(q, topK)
+sr := e.Search(q, topK)
+for _, r := range sr.Hits {
+    fmt.Println(r.ID, r.Score)
+}
 ```
+
+### Range queries
+
+Filter documents where a numeric field falls within given bounds. All bounds are optional
+(nil = unbounded). Combine with `Must` to narrow a text search.
+
+```go
+// 10 <= price <= 100
+q := query.NewBuilder().
+    Must("body", "laptop").
+    Range("price", query.Ptr(10), query.Ptr(100)).
+    Build()
+
+// score > 4.5, no upper bound
+q := query.NewBuilder().
+    Must("body", "restaurant").
+    Range("score", query.Ptr(4.5), nil).
+    Build()
+
+sr := e.Search(q, 10)
+```
+
+`query.Ptr(v)` is a convenience helper that returns a `*float64`.
+
+### Terms query
+
+Filter documents where a field matches any one of the given values — equivalent to SQL
+`WHERE status IN ('open', 'in-progress')`. All `Terms` clauses are mandatory (AND between clauses, OR within values).
+
+```go
+q := query.NewBuilder().
+    Must("body", "ticket").
+    Terms("status", "open", "in-progress").     // status must be one of these
+    Terms("priority", "high", "critical").       // AND priority must be one of these
+    Build()
+
+sr := e.Search(q, 10)
+```
+
+Unlike `Should`, `Terms` is a hard filter and does not affect BM25 score.
+
+### Sorting
+
+By default results are ranked by BM25 score. Pass `SortBy` to sort by a field value instead.
+Numeric fields are compared numerically; string fields are compared lexicographically.
+Documents with equal sort values use BM25 score as tiebreaker.
+
+```go
+// Sort by price ascending
+sr := e.Search(q, 10, engine.SortBy("price", engine.Asc))
+
+// Sort by published_at descending
+sr := e.Search(q, 10, engine.SortBy("published_at", engine.Desc))
+```
+
+### Pagination
+
+**Offset pagination** — skip and limit by position. Simple but degrades at large offsets.
+
+```go
+// Page 2 of 20 results per page
+sr := e.Search(q, 0, engine.SearchOptions{
+    Sort: []engine.SortClause{{Field: "price", Order: engine.Asc}},
+    From: 20,
+    Size: 20,
+})
+```
+
+**Cursor pagination** (`SearchAfter`) — uses the last result's sort value as a bookmark.
+O(k) regardless of page depth; stable under concurrent writes.
+
+```go
+// Page 1
+sr := e.Search(q, 0, engine.SearchOptions{
+    Sort: []engine.SortClause{{Field: "price", Order: engine.Asc}},
+    Size: 20,
+})
+
+// Page 2 — pass the cursor returned by page 1
+sr2 := e.Search(q, 0, engine.SearchOptions{
+    Sort:        []engine.SortClause{{Field: "price", Order: engine.Asc}},
+    Size:        20,
+    SearchAfter: sr.NextCursor, // nil when no more pages
+})
+```
+
+`NextCursor` is `nil` when the current page is the last one.
+`SearchAfter` requires `Sort` — cursor pagination is undefined without a stable sort order.
 
 ### Phrase search
 
 ```go
 // Terms must appear consecutively in this order
 q := query.NewBuilder().Phrase("body", "new", "york").Build()
-results := e.Search(q, 10)
+sr := e.Search(q, 10)
 ```
 
 ### Fuzzy search
@@ -180,7 +277,7 @@ e.Index(engine.Document{ID: "1", Fields: map[string]engine.Field{
 }})
 
 // Finds doc "1" because "car" expands to include "automobile"
-results := e.Search(query.NewBuilder().Should("body", "car").Build(), 10)
+sr := e.Search(query.NewBuilder().Should("body", "car").Build(), 10)
 ```
 
 ### Prefix search
@@ -199,8 +296,8 @@ results := e.PrefixSearch("body", "gol")
 contains a matched query term, with the matching word wrapped in `<em>…</em>`.
 
 ```go
-results := e.Search(query.NewBuilder().Must("body", "go").Build(), 10)
-for _, r := range results {
+sr := e.Search(query.NewBuilder().Must("body", "go").Build(), 10)
+for _, r := range sr.Hits {
     for _, h := range r.Highlights {
         fmt.Printf("field=%s snippet=%s\n", h.Field, h.Snippet)
         // field=body snippet="<em>Go</em> is a fast compiled language"
@@ -449,7 +546,7 @@ storage/         Storage interface + in-memory implementation
 storage/local/   append-only WAL (Bitcask-style) for document durability
 engine/          public SDK — Index, IndexStruct, Search, FuzzySearch, VectorSearch,
                               HybridSearch, PrefixSearch, Aggregate, HighlightDoc,
-                              Schema, Reindex, Snapshot, Save, Load, Close
+                              SortBy, Schema, Reindex, Snapshot, Save, Load, Close
 ```
 
 ### Query API

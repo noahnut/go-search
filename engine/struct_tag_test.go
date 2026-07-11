@@ -40,7 +40,7 @@ func TestIndexStruct_Basic(t *testing.T) {
 	}
 
 	q := query.NewBuilder().Must("body", "goroutines").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) == 0 || results[0].ID != "1" {
 		t.Error("indexed struct should be searchable by body field")
 	}
@@ -54,7 +54,7 @@ func TestIndexStruct_BoostApplied(t *testing.T) {
 	e.IndexStruct(Article{ID: "2", Title: "unrelated", Body: "golang"})
 
 	q := query.NewBuilder().Should("title", "golang").Should("body", "golang").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) < 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -144,7 +144,7 @@ func TestIndexStruct_PointerInput(t *testing.T) {
 	}
 
 	q := query.NewBuilder().Must("body", "pointer").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) == 0 || results[0].ID != "1" {
 		t.Error("struct passed as pointer should be searchable")
 	}

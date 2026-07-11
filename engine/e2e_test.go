@@ -41,28 +41,28 @@ func TestE2E_BlogSearch(t *testing.T) {
 
 	// Must: exact field match
 	q := query.NewBuilder().Must("title", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 2 {
 		t.Errorf("Must('title','go'): expected 2, got %d", len(results))
 	}
 
 	// MustNot: exclude a field value
 	q = query.NewBuilder().Must("body", "goroutines").MustNot("title", "concurrency").Build()
-	results = e.Search(q, 10)
+	results = e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("Must+MustNot: expected only doc '1', got %v", ids(results))
 	}
 
 	// Should: at least one must match, results boosted
 	q = query.NewBuilder().Should("body", "goroutines").Should("body", "channels").Build()
-	results = e.Search(q, 10)
+	results = e.Search(q, 10).Hits
 	if len(results) == 0 {
 		t.Error("Should: expected results")
 	}
 
 	// Phrase: word order matters
 	q = query.NewBuilder().Phrase("body", "goroutines", "make", "go").Build()
-	results = e.Search(q, 10)
+	results = e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "2" {
 		t.Errorf("Phrase: expected doc '2', got %v", ids(results))
 	}
@@ -100,7 +100,7 @@ func TestE2E_DocumentLifecycle(t *testing.T) {
 	// initial index
 	e.Index(doc("1", "golang is fast"))
 	q := query.NewBuilder().Must("body", "golang").Build()
-	if len(e.Search(q, 10)) != 1 {
+	if len(e.Search(q, 10).Hits) != 1 {
 		t.Fatal("after Index: doc should be searchable")
 	}
 
@@ -109,10 +109,10 @@ func TestE2E_DocumentLifecycle(t *testing.T) {
 	oldQ := query.NewBuilder().Must("body", "golang").Build()
 	newQ := query.NewBuilder().Must("body", "python").Build()
 
-	if len(e.Search(oldQ, 10)) != 0 {
+	if len(e.Search(oldQ, 10).Hits) != 0 {
 		t.Error("after upsert: old term 'golang' should be gone")
 	}
-	if len(e.Search(newQ, 10)) != 1 {
+	if len(e.Search(newQ, 10).Hits) != 1 {
 		t.Error("after upsert: new term 'python' should be findable")
 	}
 	if e.Size() != 1 {
@@ -121,7 +121,7 @@ func TestE2E_DocumentLifecycle(t *testing.T) {
 
 	// delete
 	e.Delete("1")
-	if len(e.Search(newQ, 10)) != 0 {
+	if len(e.Search(newQ, 10).Hits) != 0 {
 		t.Error("after Delete: doc should not appear in results")
 	}
 	if e.Size() != 0 {
@@ -159,13 +159,13 @@ func TestE2E_PersistAndResume(t *testing.T) {
 	}
 
 	q := query.NewBuilder().Must("body", "compiled").Build()
-	results := loaded.Search(q, 10)
+	results := loaded.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("after Load: expected doc '1', got %v", ids(results))
 	}
 
 	loaded.Index(doc("3", "rust is also compiled"))
-	results = loaded.Search(q, 10)
+	results = loaded.Search(q, 10).Hits
 	if len(results) != 2 {
 		t.Errorf("after adding doc to loaded engine: expected 2, got %d", len(results))
 	}
@@ -187,7 +187,7 @@ func TestE2E_SynonymsAndAggregate(t *testing.T) {
 
 	// searching "car" should find docs with "automobile" and "vehicle"
 	q := query.NewBuilder().Must("body", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	foundIDs := idSet(results)
 	if !foundIDs["1"] {
@@ -237,14 +237,14 @@ func TestE2E_IndexStructWorkflow(t *testing.T) {
 
 	// search
 	q := query.NewBuilder().Must("body", "goroutines").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 2 {
 		t.Errorf("expected 2 goroutine docs, got %d", len(results))
 	}
 
 	// title boost: both posts have "go" in title, prefer the one with more title matches
 	q = query.NewBuilder().Must("title", "go").Build()
-	results = e.Search(q, 10)
+	results = e.Search(q, 10).Hits
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for title:go, got %d", len(results))
 	}
@@ -273,7 +273,7 @@ func TestE2E_BoostAffectsRanking(t *testing.T) {
 	e.Index(article("2", "programming basics", "learn golang today", "go"))
 
 	q := query.NewBuilder().Should("title", "golang").Should("body", "golang").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) < 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -295,7 +295,7 @@ func TestE2E_CustomBM25Params(t *testing.T) {
 	e.Index(doc("2", "go"))             // "go" x1
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))

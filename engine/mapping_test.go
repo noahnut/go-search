@@ -17,7 +17,7 @@ func TestMapping_DefaultIsText(t *testing.T) {
 
 	// partial term match — analyzer splits "go is fast" into tokens
 	q := query.NewBuilder().Must("body", "fast").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("default text field: expected doc '1', got %v", ids(results))
 	}
@@ -51,7 +51,7 @@ func TestMapping_TextAnalyzed(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("body", "concurrency").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("text field: expected doc '1' for partial term, got %v", ids(results))
 	}
@@ -69,7 +69,7 @@ func TestMapping_KeywordExactMatchHits(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("category", "machine-learning").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("keyword exact match: expected doc '1', got %v", ids(results))
 	}
@@ -86,7 +86,7 @@ func TestMapping_KeywordPartialMatchMisses(t *testing.T) {
 
 	// "machine" alone should not match — keyword is stored whole
 	q := query.NewBuilder().Must("category", "machine").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 0 {
 		t.Errorf("keyword partial match: expected 0 results, got %v", ids(results))
 	}
@@ -102,7 +102,7 @@ func TestMapping_KeywordStoredInResults(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("category", "machine-learning").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -145,7 +145,7 @@ func TestMapping_SkipNotIndexed(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("internal", "secret").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 0 {
 		t.Errorf("skip field: expected 0 results, got %v", ids(results))
 	}
@@ -184,7 +184,7 @@ func TestMapping_IndexFalseNotSearchable(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("url", "example").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 0 {
 		t.Errorf("index:false field: expected 0 results, got %v", ids(results))
 	}
@@ -204,7 +204,7 @@ func TestMapping_IndexFalseStoredInResults(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("body", "fast").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -225,7 +225,7 @@ func TestMapping_StoreFalseSearchable(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("body", "fast").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 || results[0].ID != "1" {
 		t.Errorf("store:false field: expected doc '1' to be searchable, got %v", ids(results))
 	}
@@ -241,7 +241,7 @@ func TestMapping_StoreFalseNotInResults(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("body", "fast").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -269,19 +269,19 @@ func TestMapping_MultipleFieldsMixedTypes(t *testing.T) {
 
 	// text field: partial match
 	q := query.NewBuilder().Must("title", "concurrency").Build()
-	if results := e.Search(q, 10); len(results) != 1 {
+	if results := e.Search(q, 10).Hits; len(results) != 1 {
 		t.Errorf("text field: expected 1 result, got %v", ids(results))
 	}
 
 	// keyword field: exact match
 	q = query.NewBuilder().Must("category", "programming").Build()
-	if results := e.Search(q, 10); len(results) != 1 {
+	if results := e.Search(q, 10).Hits; len(results) != 1 {
 		t.Errorf("keyword field: expected 1 result, got %v", ids(results))
 	}
 
 	// skip field: not searchable
 	q = query.NewBuilder().Must("internal", "secret").Build()
-	if results := e.Search(q, 10); len(results) != 0 {
+	if results := e.Search(q, 10).Hits; len(results) != 0 {
 		t.Errorf("skip field: expected 0 results, got %v", ids(results))
 	}
 }

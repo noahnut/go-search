@@ -61,7 +61,7 @@ func basicSearch() {
 		MustNot("body", "python").
 		Build()
 
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	fmt.Printf("query 'go' NOT 'python' → %d result(s)\n", len(results))
 	for _, r := range results {
 		fmt.Printf("  id=%s score=%.4f title=%q\n", r.ID, r.Score, r.Fields["title"].Value)
@@ -88,7 +88,7 @@ func structTagIndexing() {
 	}
 
 	q := query.NewBuilder().Must("body", "goroutines").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	fmt.Printf("body:goroutines → %d result(s)\n", len(results))
 	for _, r := range results {
 		fmt.Printf("  id=%s title=%q\n", r.ID, r.Fields["title"].Value)
@@ -120,7 +120,7 @@ func synonymSearch() {
 
 	// "car" expands to car|automobile|vehicle via Should clause
 	q := query.NewBuilder().Should("body", "car").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	fmt.Printf("should:car (expanded) → %d result(s)\n", len(results))
 	for _, r := range results {
 		fmt.Printf("  id=%s body=%q\n", r.ID, r.Fields["body"].Value)
@@ -207,7 +207,7 @@ func fieldMappings() {
 
 	// Exact-match on keyword field.
 	q := query.NewBuilder().Must("status", "open").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	fmt.Printf("status:open → %d result(s)\n", len(results))
 	for _, r := range results {
 		fmt.Printf("  id=%s title=%q priority=%s\n", r.ID, r.Fields["title"].Value, r.Fields["priority"].Value)

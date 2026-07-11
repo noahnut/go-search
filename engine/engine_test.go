@@ -29,7 +29,7 @@ func TestEngine_SegmentLifecycle(t *testing.T) {
 	e.index.Merge()
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	found := map[string]bool{}
 	for _, r := range results {
@@ -92,7 +92,7 @@ func TestEngine_Search_Must(t *testing.T) {
 	e.Index(doc("2", "python is popular"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -108,7 +108,7 @@ func TestEngine_Search_TopK_Smaller_Than_Results(t *testing.T) {
 	e.Index(doc("2", "go is popular"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 1)
+	results := e.Search(q, 1).Hits
 
 	if len(results) != 1 {
 		t.Errorf("expected 1 result (topK=1), got %d", len(results))
@@ -120,7 +120,7 @@ func TestEngine_Search_TopK_Larger_Than_Results(t *testing.T) {
 	e.Index(doc("1", "go is fast"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 1 {
 		t.Errorf("expected 1 result, got %d", len(results))
@@ -133,7 +133,7 @@ func TestEngine_Search_Ranked_By_Score(t *testing.T) {
 	e.Index(doc("2", "go go go"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -152,7 +152,7 @@ func TestEngine_Search_MustNot(t *testing.T) {
 	e.Index(doc("2", "go and python"))
 
 	q := query.NewBuilder().Must("body", "go").MustNot("body", "python").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -167,7 +167,7 @@ func TestEngine_Search_NoResults(t *testing.T) {
 	e.Index(doc("1", "go is fast"))
 
 	q := query.NewBuilder().Must("body", "python").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 0 {
 		t.Errorf("expected 0 results, got %d", len(results))
@@ -186,7 +186,7 @@ func TestEngine_Delete(t *testing.T) {
 	}
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 	for _, r := range results {
 		if r.ID == "1" {
 			t.Error("deleted doc '1' should not appear in results")
@@ -210,7 +210,7 @@ func TestEngine_Upsert_OldTermsGone(t *testing.T) {
 	e.Index(doc("1", "python is great"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 0 {
 		t.Errorf("old term 'go' should not match after upsert, got %d results", len(results))
@@ -223,7 +223,7 @@ func TestEngine_Upsert_FrequencyReflectsNewDoc(t *testing.T) {
 	e.Index(doc("1", "go go go"))
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -231,7 +231,7 @@ func TestEngine_Upsert_FrequencyReflectsNewDoc(t *testing.T) {
 
 	e2 := New()
 	e2.Index(doc("1", "go go go"))
-	results2 := e2.Search(q, 10)
+	results2 := e2.Search(q, 10).Hits
 
 	if len(results2) != 1 {
 		t.Fatalf("expected 1 result from fresh engine, got %d", len(results2))
@@ -252,7 +252,7 @@ func TestEngine_Result_Fields(t *testing.T) {
 	})
 
 	q := query.NewBuilder().Must("body", "go").Build()
-	results := e.Search(q, 10)
+	results := e.Search(q, 10).Hits
 
 	if len(results) == 0 {
 		t.Fatal("expected 1 result")
