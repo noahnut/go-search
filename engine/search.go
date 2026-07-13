@@ -104,6 +104,10 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 			continue
 		}
 
+		if passRegexFilters(doc, q.Regexes) == false {
+			continue
+		}
+
 		var terms []string
 
 		for _, clause := range q.Clauses {
@@ -494,6 +498,23 @@ func passesRangeFilters(doc Document, ranges []query.RangeClause) bool {
 		}
 		if rc.Lt != nil && val >= *rc.Lt {
 			return false
+		}
+	}
+	return true
+}
+
+func passRegexFilters(doc Document, regexes []query.RegexClause) bool {
+	for _, rc := range regexes {
+		field, ok := doc.Fields[rc.Field]
+		if !ok {
+			return false // field absent → exclude
+		}
+		re, err := regexp.Compile(rc.Regex)
+		if err != nil {
+			return false // invalid regex → exclude
+		}
+		if !re.MatchString(field.Value) {
+			return false // regex does not match → exclude
 		}
 	}
 	return true

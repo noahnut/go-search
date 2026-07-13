@@ -12,6 +12,7 @@ const (
 	Phrase  ClauseType = "phrase"   // document MUST contain the given terms in consecutive order
 	Range   ClauseType = "range"    // document MUST contain a term within the given range
 	Fuzzy   ClauseType = "fuzzy"    // document MUST contain a term within the given max distance
+	Regex   ClauseType = "regex"    // document MUST contain a term that matches the given regex
 )
 
 type RangeClause struct {
@@ -27,6 +28,11 @@ type TermsClause struct {
 	Values []string
 }
 
+type RegexClause struct {
+	Field string
+	Regex string
+}
+
 // Clause is one term in a boolean query.
 type Clause struct {
 	Field       string
@@ -40,6 +46,7 @@ type Query struct {
 	Clauses []Clause
 	Ranges  []RangeClause
 	Terms   []TermsClause
+	Regexes []RegexClause
 }
 
 // Builder constructs a Query fluently.
@@ -47,10 +54,11 @@ type Builder struct {
 	clauses []Clause
 	ranges  []RangeClause
 	terms   []TermsClause
+	regexes []RegexClause
 }
 
 func NewBuilder() *Builder {
-	return &Builder{clauses: []Clause{}, ranges: []RangeClause{}}
+	return &Builder{clauses: []Clause{}, ranges: []RangeClause{}, terms: []TermsClause{}, regexes: []RegexClause{}}
 }
 
 func (b *Builder) Must(field, term string) *Builder {
@@ -82,8 +90,13 @@ func (b *Builder) Terms(field string, values ...string) *Builder {
 	return b
 }
 
+func (b *Builder) Regex(field, regex string) *Builder {
+	b.regexes = append(b.regexes, RegexClause{Field: field, Regex: regex})
+	return b
+}
+
 func (b *Builder) Build() Query {
-	return Query{Clauses: b.clauses, Ranges: b.ranges, Terms: b.terms}
+	return Query{Clauses: b.clauses, Ranges: b.ranges, Terms: b.terms, Regexes: b.regexes}
 }
 
 func Ptr(v float64) *float64 { return &v }
