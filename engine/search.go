@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,17 +40,7 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 
 	result := make([]Result, 0)
 
-	fieldDocCounts := map[string]int{}
-	fieldAvgDocLens := map[string]float64{}
-	for key, docLen := range e.docLengths {
-		fieldName := strings.SplitN(key, ":", 2)[1]
-		fieldAvgDocLens[fieldName] += float64(docLen)
-		fieldDocCounts[fieldName]++
-	}
-
-	for f := range fieldAvgDocLens {
-		fieldAvgDocLens[f] /= float64(fieldDocCounts[f])
-	}
+	fieldAvgDocLens := e.fieldAvgDocLens()
 
 	for _, clause := range q.Clauses {
 
@@ -225,17 +216,7 @@ func (e *Engine) FuzzySearch(field, term string, maxDistance int, topK int) []Re
 
 	allIndexTerms := e.index.Terms()
 
-	fieldDocCounts := map[string]int{}
-	fieldAvgDocLens := map[string]float64{}
-	for key, docLen := range e.docLengths {
-		fieldName := strings.SplitN(key, ":", 2)[1]
-		fieldAvgDocLens[fieldName] += float64(docLen)
-		fieldDocCounts[fieldName]++
-	}
-
-	for f := range fieldAvgDocLens {
-		fieldAvgDocLens[f] /= float64(fieldDocCounts[f])
-	}
+	fieldAvgDocLens := e.fieldAvgDocLens()
 
 	seen := map[string]Result{}
 
@@ -379,6 +360,117 @@ func (e *Engine) HybridSearch(
 	}
 
 	return combinedResults[:topK]
+}
+
+func (e *Engine) WildcardSearch(field, pattern string, topK int) []Result {
+
+	regex := wildcardToRegexp(pattern)
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	matchingTerms := e.matchingTerm(field, regex)
+
+	fieldAvgDocLens := e.fieldAvgDocLens()
+
+	var result []Result
+	seen := map[string]Result{}
+	for _, term := range matchingTerms {
+		postings := e.index.Lookup(term)
+		for _, post := range postings {
+			resolvedID := post.DocID
+
+			rawDocument, exists := e.docStorage.Get(resolvedID) // ensure the document exists
+
+			if !exists {
+				continue
+			}
+
+			var doc Document
+			if err := doc.UnmarshalJSON(rawDocument); err != nil {
+				continue
+			}
+
+			fieldName := strings.SplitN(term, ":", 2)[0]
+			sc := scoring.Score(
+				float64(post.Frequency),
+				e.docLengths[resolvedID+":"+fieldName],
+				fieldAvgDocLens[fieldName],
+				e.index.DocCount(),
+				len(e.index.Lookup(term)),
+				e.bm25Params,
+				doc.Fields[fieldName].Boost,
+			)
+
+			if existing, ok := seen[resolvedID]; !ok || sc > existing.Score {
+				seen[resolvedID] = Result{ID: resolvedID, Fields: doc.Fields, Score: sc}
+			}
+		}
+	}
+
+	for _, r := range seen {
+		result = append(result, r)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Score > result[j].Score
+	})
+
+	if topK <= 0 {
+		return result
+	}
+
+	if len(result) < topK {
+		topK = len(result)
+	}
+
+	return result[:topK]
+}
+
+func (e *Engine) matchingTerm(field string, re *regexp.Regexp) []string {
+	prefix := field + ":"
+	var matches []string
+	for _, term := range e.index.Terms() {
+		if !strings.HasPrefix(term, prefix) {
+			continue
+		}
+		bare := strings.TrimPrefix(term, prefix)
+		if re.MatchString(bare) {
+			matches = append(matches, term)
+		}
+	}
+	return matches
+}
+
+func (e *Engine) fieldAvgDocLens() map[string]float64 {
+	fieldDocCounts := map[string]int{}
+	fieldAvgDocLens := map[string]float64{}
+	for key, docLen := range e.docLengths {
+		fieldName := strings.SplitN(key, ":", 2)[1]
+		fieldAvgDocLens[fieldName] += float64(docLen)
+		fieldDocCounts[fieldName]++
+	}
+	for f := range fieldAvgDocLens {
+		fieldAvgDocLens[f] /= float64(fieldDocCounts[f])
+	}
+	return fieldAvgDocLens
+}
+
+func wildcardToRegexp(pattern string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString("^")
+	for _, ch := range pattern {
+		switch ch {
+		case '*':
+			b.WriteString(".*")
+		case '?':
+			b.WriteString(".")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(ch)))
+		}
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
 }
 
 func passesRangeFilters(doc Document, ranges []query.RangeClause) bool {
