@@ -111,7 +111,7 @@ func newBase(opts ...Option) *Engine {
 		opt(e)
 	}
 
-	e.index = index.New(index.WithFlushPolicy(e.flushPolicy), index.WithMergePolicy(e.mergePolicy))
+	e.index = index.New(e.docStorage, index.WithFlushPolicy(e.flushPolicy), index.WithMergePolicy(e.mergePolicy))
 
 	if e.docStorage == nil {
 		e.docStorage = memory.New()
@@ -179,6 +179,16 @@ func (e *Engine) Index(doc Document) error {
 			case FieldTypeKeyword, FieldTypeInteger, FieldTypeFloat, FieldTypeBoolean:
 				// index the raw value as a single token — no analysis
 				e.index.AddRaw(doc.ID, fieldName, field.Value)
+				switch fm.Type {
+				case FieldTypeInteger:
+					if intValue, err := strconv.ParseInt(field.Value, 10, 64); err == nil {
+						e.index.AddNumericInt(fieldName, doc.ID, intValue)
+					}
+				case FieldTypeFloat:
+					if floatValue, err := strconv.ParseFloat(field.Value, 64); err == nil {
+						e.index.AddNumeric(fieldName, doc.ID, floatValue)
+					}
+				}
 			case FieldTypeText:
 				e.index.Add(doc.ID, field.Value, &fieldName, e.analyzer)
 			}
@@ -215,6 +225,7 @@ func (e *Engine) Delete(id string) {
 		}
 	}
 	e.index.Delete(id)
+	e.index.DeleteNumeric(id)
 	e.docStorage.Delete(id)
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/noahfan/go-search/storage/memory"
 )
 
 // --- FlushPolicy: MaxTokens ---
@@ -11,7 +13,7 @@ import (
 func TestFlushPolicy_MaxTokensTriggersFlush(t *testing.T) {
 	// "go is fast" → 3 tokens per doc; MaxTokens=6 → flush after every 2 docs
 	a := newAnalyzer()
-	idx := New(WithFlushPolicy(&FlushPolicy{MaxTokens: 6}))
+	idx := New(memory.New(), WithFlushPolicy(&FlushPolicy{MaxTokens: 6}))
 
 	idx.Add("doc1", "go is fast", nil, a)
 	if len(idx.segments) != 0 {
@@ -34,7 +36,7 @@ func TestFlushPolicy_MaxTokensTriggersFlush(t *testing.T) {
 func TestFlushPolicy_MaxTokensZeroDisabled(t *testing.T) {
 	// MaxTokens=0 means no auto-flush on token count
 	a := newAnalyzer()
-	idx := New(WithFlushPolicy(&FlushPolicy{MaxTokens: 0}))
+	idx := New(memory.New(), WithFlushPolicy(&FlushPolicy{MaxTokens: 0}))
 
 	for i := 0; i < 10; i++ {
 		idx.Add(fmt.Sprintf("doc%d", i), "go is fast", nil, a)
@@ -47,7 +49,7 @@ func TestFlushPolicy_MaxTokensZeroDisabled(t *testing.T) {
 
 func TestFlushPolicy_AllDocsStillFindableAfterAutoFlush(t *testing.T) {
 	a := newAnalyzer()
-	idx := New(WithFlushPolicy(&FlushPolicy{MaxTokens: 6}))
+	idx := New(memory.New(), WithFlushPolicy(&FlushPolicy{MaxTokens: 6}))
 
 	for i := 1; i <= 6; i++ {
 		idx.Add(fmt.Sprintf("doc%d", i), "go is fast", nil, a)
@@ -63,7 +65,7 @@ func TestFlushPolicy_AllDocsStillFindableAfterAutoFlush(t *testing.T) {
 
 func TestFlushPolicy_FlushIntervalFlushesOnTimer(t *testing.T) {
 	a := newAnalyzer()
-	idx := New(WithFlushPolicy(&FlushPolicy{
+	idx := New(memory.New(), WithFlushPolicy(&FlushPolicy{
 		MaxTokens:     0,
 		FlushInterval: 50 * time.Millisecond,
 	}))
@@ -100,7 +102,7 @@ func TestFlushPolicy_FlushIntervalFlushesOnTimer(t *testing.T) {
 func TestMergePolicy_TriggersBackgroundMerge(t *testing.T) {
 	a := newAnalyzer()
 	// flush every doc, merge when segments > 2
-	idx := New(
+	idx := New(memory.New(),
 		WithFlushPolicy(&FlushPolicy{MaxTokens: 1}),
 		WithMergePolicy(&MergePolicy{MaxSegments: 2}),
 	)
@@ -124,7 +126,7 @@ func TestMergePolicy_TriggersBackgroundMerge(t *testing.T) {
 
 func TestMergePolicy_AllDocsStillFindableAfterBackgroundMerge(t *testing.T) {
 	a := newAnalyzer()
-	idx := New(
+	idx := New(memory.New(),
 		WithFlushPolicy(&FlushPolicy{MaxTokens: 1}),
 		WithMergePolicy(&MergePolicy{MaxSegments: 2}),
 	)
@@ -144,7 +146,7 @@ func TestMergePolicy_AllDocsStillFindableAfterBackgroundMerge(t *testing.T) {
 func TestMergePolicy_OnlyOneMergeConcurrently(t *testing.T) {
 	a := newAnalyzer()
 	// small MaxSegments so merge triggers often
-	idx := New(
+	idx := New(memory.New(),
 		WithFlushPolicy(&FlushPolicy{MaxTokens: 1}),
 		WithMergePolicy(&MergePolicy{MaxSegments: 1}),
 	)
@@ -165,7 +167,7 @@ func TestMergePolicy_OnlyOneMergeConcurrently(t *testing.T) {
 func TestMergePolicy_ZeroDisabled(t *testing.T) {
 	a := newAnalyzer()
 	// flush every doc, no auto-merge
-	idx := New(
+	idx := New(memory.New(),
 		WithFlushPolicy(&FlushPolicy{MaxTokens: 1}),
 		WithMergePolicy(&MergePolicy{MaxSegments: 0}),
 	)

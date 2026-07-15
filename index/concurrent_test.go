@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/noahfan/go-search/storage/memory"
 )
 
 // TestConcurrent_LookupAcrossSegments verifies correctness: all docs are found
 // after multiple flushes create multiple segments, searched concurrently.
 func TestConcurrent_LookupAcrossSegments(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 6; i++ {
@@ -26,7 +28,7 @@ func TestConcurrent_LookupAcrossSegments(t *testing.T) {
 // TestConcurrent_LookupFiltersDeleted verifies tombstone filtering works
 // when results are merged from concurrent segment goroutines.
 func TestConcurrent_LookupFiltersDeleted(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 4; i++ {
@@ -52,7 +54,7 @@ func TestConcurrent_LookupFiltersDeleted(t *testing.T) {
 // TestConcurrent_ConcurrentLookups runs many Lookup calls in parallel to
 // detect data races. Run with: go test -race ./index/...
 func TestConcurrent_ConcurrentLookups(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 8; i++ {
@@ -77,7 +79,7 @@ func TestConcurrent_ConcurrentLookups(t *testing.T) {
 // TestConcurrent_LookupWhileAdding runs concurrent reads and writes to verify
 // the RWMutex prevents data races between Lookup and Add.
 func TestConcurrent_LookupWhileAdding(t *testing.T) {
-	idx := NewWithFlushSize(50)
+	idx := NewWithFlushSize(50, memory.New())
 	a := newAnalyzer()
 
 	// seed some docs first
@@ -111,7 +113,7 @@ func TestConcurrent_LookupWhileAdding(t *testing.T) {
 // TestConcurrent_BufferSearchedSequentially confirms that a term found only in
 // the buffer (no segments) is still returned correctly.
 func TestConcurrent_BufferSearchedSequentially(t *testing.T) {
-	idx := NewWithFlushSize(100) // high flush size so nothing flushes
+	idx := NewWithFlushSize(100, memory.New()) // high flush size so nothing flushes
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)

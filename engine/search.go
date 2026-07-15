@@ -42,6 +42,14 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 
 	fieldAvgDocLens := e.fieldAvgDocLens()
 
+	if len(q.Clauses) == 0 && len(q.Ranges) > 0 {
+		for _, rc := range q.Ranges {
+			for _, docID := range e.index.RangeQuery(rc.Field, rc.Gte, rc.Lte, rc.Gt, rc.Lt) {
+				candidateDocs[docID] = map[string]index.Posting{}
+			}
+		}
+	}
+
 	for _, clause := range q.Clauses {
 
 		switch clause.Type {

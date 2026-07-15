@@ -1,12 +1,13 @@
 package index
 
 import (
+	"github.com/noahfan/go-search/storage/memory"
 	"fmt"
 	"testing"
 )
 
 func TestSegment_FlushTriggered(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -24,7 +25,7 @@ func TestSegment_FlushTriggered(t *testing.T) {
 }
 
 func TestSegment_LookupInSegment(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -37,7 +38,7 @@ func TestSegment_LookupInSegment(t *testing.T) {
 }
 
 func TestSegment_LookupAcrossBufferAndSegment(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -51,7 +52,7 @@ func TestSegment_LookupAcrossBufferAndSegment(t *testing.T) {
 }
 
 func TestSegment_DeleteViaTombstone(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -77,7 +78,7 @@ func TestSegment_DeleteViaTombstone(t *testing.T) {
 }
 
 func TestSegment_DeleteInBuffer(t *testing.T) {
-	idx := NewWithFlushSize(10)
+	idx := NewWithFlushSize(10, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a) // stays in buffer
@@ -91,7 +92,7 @@ func TestSegment_DeleteInBuffer(t *testing.T) {
 }
 
 func TestSegment_AddAfterDelete(t *testing.T) {
-	idx := NewWithFlushSize(10)
+	idx := NewWithFlushSize(10, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -110,7 +111,7 @@ func TestSegment_AddAfterDelete(t *testing.T) {
 }
 
 func TestSegment_DocCount(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -127,7 +128,7 @@ func TestSegment_DocCount(t *testing.T) {
 }
 
 func TestSegment_MultipleFlushes(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 5; i++ {
@@ -153,7 +154,7 @@ func TestSegment_MultipleFlushes(t *testing.T) {
 }
 
 func TestSegment_SnapshotRestore(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -162,7 +163,7 @@ func TestSegment_SnapshotRestore(t *testing.T) {
 
 	segs, tombstones := idx.Snapshot()
 
-	idx2 := New()
+	idx2 := New(memory.New())
 	idx2.Restore(segs, tombstones)
 
 	for _, p := range idx2.Lookup("go") {

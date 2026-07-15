@@ -1,13 +1,14 @@
 package index
 
 import (
+	"github.com/noahfan/go-search/storage/memory"
 	"fmt"
 	"testing"
 )
 
 func TestMerge_CollapsesSegments(t *testing.T) {
 	// 4 docs with flushSize=2 → 2 segments; after merge → 1 segment
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 4; i++ {
@@ -25,7 +26,7 @@ func TestMerge_CollapsesSegments(t *testing.T) {
 }
 
 func TestMerge_AllDocsStillFindable(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 4; i++ {
@@ -41,7 +42,7 @@ func TestMerge_AllDocsStillFindable(t *testing.T) {
 }
 
 func TestMerge_TombstonedDocsDropped(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -58,7 +59,7 @@ func TestMerge_TombstonedDocsDropped(t *testing.T) {
 }
 
 func TestMerge_TombstonesCleared(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -73,7 +74,7 @@ func TestMerge_TombstonesCleared(t *testing.T) {
 }
 
 func TestMerge_NoSegmentsIsNoop(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a) // stays in buffer, no flush
@@ -100,7 +101,7 @@ func TestMerge_NoSegmentsIsNoop(t *testing.T) {
 }
 
 func TestMerge_DocCountUnchanged(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 4; i++ {
@@ -116,7 +117,7 @@ func TestMerge_DocCountUnchanged(t *testing.T) {
 }
 
 func TestMerge_TermCountUnchanged(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	for i := 1; i <= 4; i++ {
@@ -132,7 +133,7 @@ func TestMerge_TermCountUnchanged(t *testing.T) {
 }
 
 func TestMerge_SurvivingDocFindableAfterTombstone(t *testing.T) {
-	idx := NewWithFlushSize(2)
+	idx := NewWithFlushSize(2, memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)

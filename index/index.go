@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/noahfan/go-search/analysis"
+	"github.com/noahfan/go-search/storage"
 )
 
 // FlushPolicy controls when the buffer flushes to a segment automatically.
@@ -64,22 +65,23 @@ type Index struct {
 	flushSize   int                 // flush buffer → segment when buffer hits this
 	flushPolicy FlushPolicy
 	mergePolicy MergePolicy
-	docCount    int          // total number of unique documents in the index
-	tokenCount  int          // total number of tokens in the index
-	merging     atomic.Int32 // 0 = idle, 1 = in progress
+	docCount    int           // total number of unique documents in the index
+	tokenCount  int           // total number of tokens in the index
+	merging     atomic.Int32  // 0 = idle, 1 = in progress
+	numeric     *NumericIndex // numeric index
 	stopFlush   chan struct{} // closed by StopFlushTimer
 }
 
 // NewWithFlushSize creates an index that flushes every n documents.
 // Used by tests that need deterministic segment boundaries.
-func NewWithFlushSize(n int) *Index {
-	idx := New()
+func NewWithFlushSize(n int, storage storage.Storage) *Index {
+	idx := New(storage)
 	idx.flushPolicy.MaxTokens = 0 // disable token-based auto-flush
 	idx.flushSize = n
 	return idx
 }
 
-func New(opts ...Option) *Index {
+func New(storage storage.Storage, opts ...Option) *Index {
 
 	defaultFlushPolicy := FlushPolicy{
 		MaxTokens:     128,
@@ -102,6 +104,7 @@ func New(opts ...Option) *Index {
 		mergePolicy: defaultMergePolicy,
 		docCount:    0,
 		merging:     atomic.Int32{},
+		numeric:     NewNumericIndex(storage),
 	}
 
 	for _, opt := range opts {
@@ -333,6 +336,7 @@ func (idx *Index) Flush() {
 			go func() {
 				defer idx.merging.Store(0)
 				idx.Merge()
+				idx.FlushNumeric()
 			}()
 		}
 	}
@@ -440,4 +444,21 @@ func (idx *Index) clearTombstone(docID string) {
 			}
 		}
 	}
+}
+
+func (idx *Index) AddNumeric(field, docID string, value float64) {
+	idx.numeric.AddFloat(field, docID, value)
+}
+
+func (idx *Index) AddNumericInt(field, docID string, value int64) {
+	idx.numeric.AddInt(field, docID, value)
+}
+func (idx *Index) DeleteNumeric(docID string) {
+	idx.numeric.Delete(docID)
+}
+func (idx *Index) FlushNumeric() {
+	idx.numeric.Flush()
+}
+func (idx *Index) RangeQuery(field string, gte, lte, gt, lt *float64) []string {
+	return idx.numeric.Range(field, gte, lte, gt, lt)
 }

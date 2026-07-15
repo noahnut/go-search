@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/noahfan/go-search/analysis"
+	"github.com/noahfan/go-search/storage/memory"
 )
 
 // shared analyzer for all tests: standard tokenizer, no stop words
@@ -14,7 +15,7 @@ func newAnalyzer() *analysis.Analyzer {
 }
 
 func TestIndex_Add_Lookup(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -29,7 +30,7 @@ func TestIndex_Add_Lookup(t *testing.T) {
 }
 
 func TestIndex_Lookup_Missing(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 
 	got := idx.Lookup("nonexistent")
 	if got != nil {
@@ -38,7 +39,7 @@ func TestIndex_Lookup_Missing(t *testing.T) {
 }
 
 func TestIndex_Frequency_And_Positions(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := newAnalyzer()
 
 	// "go" appears twice
@@ -58,7 +59,7 @@ func TestIndex_Frequency_And_Positions(t *testing.T) {
 }
 
 func TestIndex_MultipleDocuments(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -71,7 +72,7 @@ func TestIndex_MultipleDocuments(t *testing.T) {
 }
 
 func TestIndex_DocCount(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := newAnalyzer()
 
 	if idx.DocCount() != 0 {
@@ -87,7 +88,7 @@ func TestIndex_DocCount(t *testing.T) {
 }
 
 func TestIndex_TermCount(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go fast", nil, a)
@@ -105,7 +106,7 @@ func TestIndex_TermCount(t *testing.T) {
 }
 
 func TestIndex_Delete(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := newAnalyzer()
 
 	idx.Add("doc1", "go is fast", nil, a)
@@ -136,7 +137,7 @@ func TestIndex_Delete(t *testing.T) {
 }
 
 func TestIndex_ConcurrentAdd(t *testing.T) {
-	idx := New()
+	idx := New(memory.New())
 	a := analysis.NewAnalyzer(&analysis.StandardTokenizer{})
 
 	var wg sync.WaitGroup
