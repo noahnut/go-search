@@ -18,6 +18,8 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Segment merging** — collapse segments and permanently drop deleted documents
 - **Persistence** — append-only WAL for document durability; gob snapshots for fast startup; automatic delta recovery on restart
 - **Prefix search / autocomplete** — trie-backed, returns all docs whose terms start with a prefix
+- **Wildcard search** — `*` (any sequence) and `?` (single char) matched against indexed terms; BM25-ranked
+- **Regex query** — filter documents where a field value matches a Go regular expression
 - **Aggregations** — group and count results by field value (faceted search)
 - **Struct tag indexing** — annotate your own structs with `search:` tags; no manual `Document{}` construction
 - **Field mappings** — declare each field as `text` (analyzed), `keyword` (exact match), or `skip` (not indexed); control `index` and `store` independently
@@ -289,6 +291,37 @@ trie — O(prefix length) to find all completions.
 // finds docs containing "golang", "gold", "golden", etc.
 results := e.PrefixSearch("body", "gol")
 ```
+
+### Wildcard search
+
+`*` matches any sequence of characters; `?` matches exactly one. Patterns are matched against
+individual indexed terms (post-analysis tokens), not the raw field value. Results are BM25-ranked.
+
+```go
+// "go*" matches "golang", "goroutine", "gold", …
+results := e.WildcardSearch("body", "go*", 10)
+
+// "g?" matches two-character terms starting with "g": "go", "ge", …
+results := e.WildcardSearch("body", "g?", 10)
+```
+
+### Regex query
+
+Filter documents where a field's **raw stored value** matches a Go regular expression.
+Unlike `WildcardSearch`, the regex runs against the complete field value, not individual tokens.
+Useful for structured fields like emails, product codes, or URLs.
+
+```go
+q := query.NewBuilder().
+    Must("body", "go").
+    Regex("email", `.*@example\.com`). // raw value must match this pattern
+    Build()
+
+sr := e.Search(q, 10)
+```
+
+All `Regex` clauses are mandatory — a document must satisfy every clause to be included.
+Invalid regex patterns silently exclude documents (the clause acts as a no-match filter).
 
 ### Highlighting
 
@@ -565,8 +598,8 @@ query/           boolean query builder and matching logic
 storage/         Storage interface + in-memory implementation
 storage/local/   append-only WAL (Bitcask-style) for document durability
 engine/          public SDK — Index, IndexStruct, Search, FuzzySearch, VectorSearch,
-                              HybridSearch, PrefixSearch, Aggregate, HighlightDoc,
-                              SortBy, Schema, Reindex, Snapshot, Save, Load, Close
+                              HybridSearch, PrefixSearch, WildcardSearch, Aggregate,
+                              HighlightDoc, SortBy, Schema, Reindex, Snapshot, Save, Load, Close
 ```
 
 ### Query API
