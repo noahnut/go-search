@@ -69,6 +69,7 @@ type Index struct {
 	tokenCount  int           // total number of tokens in the index
 	merging     atomic.Int32  // 0 = idle, 1 = in progress
 	numeric     *NumericIndex // numeric index
+	fieldIndex  *FieldIndex   // field index
 	stopFlush   chan struct{} // closed by StopFlushTimer
 }
 
@@ -105,6 +106,7 @@ func New(storage storage.Storage, opts ...Option) *Index {
 		docCount:    0,
 		merging:     atomic.Int32{},
 		numeric:     NewNumericIndex(storage),
+		fieldIndex:  NewFieldIndex(),
 	}
 
 	for _, opt := range opts {
@@ -461,4 +463,25 @@ func (idx *Index) FlushNumeric() {
 }
 func (idx *Index) RangeQuery(field string, gte, lte, gt, lt *float64) []string {
 	return idx.numeric.Range(field, gte, lte, gt, lt)
+}
+
+func (idx *Index) AddFieldValue(field, docID, rawValue string, isNumeric bool) {
+	idx.fieldIndex.Add(field, docID, rawValue, isNumeric)
+	idx.fieldIndex.Sort()
+}
+
+func (idx *Index) DeleteFieldValues(docID string) {
+	idx.fieldIndex.Delete(docID)
+}
+
+func (idx *Index) RebuildFieldIndex(numericFields, keywordFields map[string]bool) {
+	idx.fieldIndex.Rebuild(idx, numericFields, keywordFields)
+}
+
+func (idx *Index) FieldRange(field string, gte, lte, gt, lt *float64) []string {
+	return idx.fieldIndex.Range(field, gte, lte, gt, lt)
+}
+
+func (idx *Index) FieldSortValues(field string, desc bool, after *string) []FieldEntry {
+	return idx.fieldIndex.SortValues(field, desc, after)
 }

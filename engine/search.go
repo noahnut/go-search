@@ -34,13 +34,16 @@ type SearchResult struct {
 func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	candidateDocs := make(map[string]map[string]index.Posting)
 
 	q = e.expandQueryWithSynonyms(q)
-
-	result := make([]Result, 0)
-
 	fieldAvgDocLens := e.fieldAvgDocLens()
+
+	var searchOpts *SearchOptions
+	if len(opts) > 0 {
+		searchOpts = &opts[0]
+	}
+
+	candidateDocs := make(map[string]map[string]index.Posting)
 
 	if len(q.Clauses) == 0 && len(q.Ranges) > 0 {
 		for _, rc := range q.Ranges {
@@ -51,31 +54,22 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 	}
 
 	for _, clause := range q.Clauses {
-
 		switch clause.Type {
 		case query.Phrase:
 			for _, term := range strings.Fields(clause.Term) {
 				indexKey := clause.Field + ":" + term
-				postings := e.index.Lookup(indexKey)
-				if len(postings) == 0 {
-					continue
-				}
-				for _, posting := range e.index.Lookup(indexKey) {
-					if candidateDocs[posting.DocID] == nil {
-						candidateDocs[posting.DocID] = make(map[string]index.Posting)
+				if postings := e.index.Lookup(indexKey); len(postings) > 0 {
+					for _, posting := range postings {
+						if candidateDocs[posting.DocID] == nil {
+							candidateDocs[posting.DocID] = make(map[string]index.Posting)
+						}
+						candidateDocs[posting.DocID][term] = posting
 					}
-					candidateDocs[posting.DocID][term] = posting
 				}
 			}
-			continue
 		default:
 			indexKey := clause.Field + ":" + clause.Term
-			postings := e.index.Lookup(indexKey)
-			if len(postings) == 0 {
-				continue
-			}
-
-			for _, posting := range postings {
+			for _, posting := range e.index.Lookup(indexKey) {
 				if _, ok := candidateDocs[posting.DocID]; !ok {
 					candidateDocs[posting.DocID] = make(map[string]index.Posting)
 				}
@@ -84,89 +78,36 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 		}
 	}
 
+	var result []Result
+
+	// Sort-first fast path: when the sort field is in the FieldIndex, walk entries
+	// in sorted order and Bitcask-fetch only for docs that pass all filters.
+	// This reduces Bitcask reads from O(candidates) to O(topK) for sort queries.
+	if searchOpts != nil && len(searchOpts.Sort) > 0 {
+		sc := searchOpts.Sort[0]
+		if sortedEntries := e.index.FieldSortValues(sc.Field, sc.Order == Desc, nil); sortedEntries != nil {
+			result = e.sortFirstSearch(q, candidateDocs, sortedEntries, fieldAvgDocLens, topK, searchOpts)
+			return e.applyPagination(result, topK, searchOpts)
+		}
+	}
+
+	// Score-first fallback: score all candidates, then sort.
 	seen := map[string]Result{}
 	for docID, postings := range candidateDocs {
 		if !query.Match(q, postings) {
 			continue
 		}
-
-		resolvedDocID := docID
-
-		totalScore := 0.0
-
-		document, exists := e.docStorage.Get(resolvedDocID)
-		if !exists {
+		r, ok := e.scoreDoc(docID, postings, q, fieldAvgDocLens)
+		if !ok {
 			continue
 		}
-
-		var doc Document
-		if err := doc.UnmarshalJSON(document); err != nil {
-			continue
-		}
-
-		if passesRangeFilters(doc, q.Ranges) == false {
-			continue
-		}
-
-		if passTermsFilters(doc, q.Terms) == false {
-			continue
-		}
-
-		if passRegexFilters(doc, q.Regexes) == false {
-			continue
-		}
-
-		var terms []string
-
-		for _, clause := range q.Clauses {
-
-			if clause.Type == query.MustNot {
-				continue
-			}
-			_, ok := postings[clause.Field+":"+clause.Term]
-			if !ok {
-				continue
-			}
-
-			if clause.Type == query.Must || clause.Type == query.Should {
-				terms = append(terms, clause.Term)
-			}
-
-			totalScore += scoring.Score(
-				float64(postings[clause.Field+":"+clause.Term].Frequency),
-				e.docLengths[resolvedDocID+":"+clause.Field],
-				fieldAvgDocLens[clause.Field],
-				e.index.DocCount(),
-				len(e.index.Lookup(clause.Field+":"+clause.Term)),
-				e.bm25Params,
-				doc.Fields[clause.Field].Boost,
-			)
-		}
-
-		textFields := make(map[string]Field)
-		for name, field := range doc.Fields {
-			fm, ok := e.schema.Get(name)
-			if !ok || fm.Type == FieldTypeText {
-				textFields[name] = field
-			}
-		}
-
-		if existing, ok := seen[resolvedDocID]; !ok || totalScore > existing.Score {
-			highlights := HighlightDoc(Document{ID: doc.ID, Fields: textFields}, terms, e.analyzer, HighlightMarkerOpen, HighlightMarkerClose)
-			seen[resolvedDocID] = Result{ID: resolvedDocID, Fields: doc.Fields, Score: totalScore, Highlights: highlights}
+		if existing, exists := seen[docID]; !exists || r.Score > existing.Score {
+			seen[docID] = r
 		}
 	}
-
-	for _, res := range seen {
-		result = append(result, res)
+	for _, r := range seen {
+		result = append(result, r)
 	}
-
-	// opts is variadic for backward compatibility; nil means "use defaults".
-	var searchOpts *SearchOptions
-	if len(opts) > 0 {
-		searchOpts = &opts[0]
-	}
-
 	if searchOpts != nil && len(searchOpts.Sort) > 0 {
 		result = e.Sort(result, *searchOpts)
 	} else {
@@ -174,21 +115,166 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 			return result[i].Score > result[j].Score
 		})
 	}
+	return e.applyPagination(result, topK, searchOpts)
+}
 
-	if searchOpts != nil && searchOpts.SearchAfter != nil {
-		cursor := searchOpts.SearchAfter
-		found := false
-		for i, r := range result {
-			if r.ID == cursor.DocID {
-				result = result[i+1:]
-				found = true
+// sortFirstSearch walks sortedEntries in sort order and Bitcask-fetches only for
+// qualifying docs, stopping once enough results are collected for the current page.
+// Docs without the sort field are appended at the end, sorted by BM25 score.
+func (e *Engine) sortFirstSearch(
+	q query.Query,
+	candidateDocs map[string]map[string]index.Posting,
+	sortedEntries []index.FieldEntry,
+	fieldAvgDocLens map[string]float64,
+	topK int,
+	searchOpts *SearchOptions,
+) []Result {
+	// Pre-qualify candidates using only in-memory state (no Bitcask reads).
+	qualified := make(map[string]map[string]index.Posting, len(candidateDocs))
+	for docID, postings := range candidateDocs {
+		if query.Match(q, postings) {
+			qualified[docID] = postings
+		}
+	}
+
+	// Effective limit for early stop.
+	// SearchAfter disables it: we must scan until we find the cursor position.
+	limit := topK
+	if searchOpts.SearchAfter != nil {
+		limit = 0
+	} else if searchOpts.Size > 0 {
+		need := searchOpts.From + searchOpts.Size
+		if limit <= 0 || need < limit {
+			limit = need
+		}
+	}
+
+	var result []Result
+	inSortField := make(map[string]struct{})
+
+	for _, fe := range sortedEntries {
+		inSortField[fe.DocID] = struct{}{}
+		postings, ok := qualified[fe.DocID]
+		if !ok {
+			continue
+		}
+		r, ok := e.scoreDoc(fe.DocID, postings, q, fieldAvgDocLens)
+		if !ok {
+			continue
+		}
+		result = append(result, r)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+
+	// Within equal sort field values, rank by BM25 score descending.
+	// sort.SliceStable preserves FieldIndex order for non-equal values.
+	sortField := searchOpts.Sort[0].Field
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Fields[sortField].Value == result[j].Fields[sortField].Value {
+			return result[i].Score > result[j].Score
+		}
+		return false
+	})
+
+	// Docs without the sort field: collect at end, sorted by BM25 score.
+	// Skipped when early stop has already filled the page.
+	if limit <= 0 || len(result) < limit {
+		var tail []Result
+		for docID, postings := range qualified {
+			if _, has := inSortField[docID]; has {
+				continue
+			}
+			r, ok := e.scoreDoc(docID, postings, q, fieldAvgDocLens)
+			if !ok {
+				continue
+			}
+			tail = append(tail, r)
+		}
+		sort.Slice(tail, func(i, j int) bool { return tail[i].Score > tail[j].Score })
+		if limit > 0 {
+			if remaining := limit - len(result); len(tail) > remaining {
+				tail = tail[:remaining]
 			}
 		}
+		result = append(result, tail...)
+	}
 
-		if !found {
-			result = nil
+	return result
+}
+
+// scoreDoc fetches a doc from storage, applies all filters, and returns a scored Result.
+func (e *Engine) scoreDoc(docID string, postings map[string]index.Posting, q query.Query, fieldAvgDocLens map[string]float64) (Result, bool) {
+	rawDoc, exists := e.docStorage.Get(docID)
+	if !exists {
+		return Result{}, false
+	}
+	var doc Document
+	if err := doc.UnmarshalJSON(rawDoc); err != nil {
+		return Result{}, false
+	}
+	if !passesRangeFilters(doc, q.Ranges) {
+		return Result{}, false
+	}
+	if !passTermsFilters(doc, q.Terms) {
+		return Result{}, false
+	}
+	if !passRegexFilters(doc, q.Regexes) {
+		return Result{}, false
+	}
+
+	totalScore := 0.0
+	var terms []string
+	for _, clause := range q.Clauses {
+		if clause.Type == query.MustNot {
+			continue
 		}
+		p, ok := postings[clause.Field+":"+clause.Term]
+		if !ok {
+			continue
+		}
+		if clause.Type == query.Must || clause.Type == query.Should {
+			terms = append(terms, clause.Term)
+		}
+		totalScore += scoring.Score(
+			float64(p.Frequency),
+			e.docLengths[docID+":"+clause.Field],
+			fieldAvgDocLens[clause.Field],
+			e.index.DocCount(),
+			len(e.index.Lookup(clause.Field+":"+clause.Term)),
+			e.bm25Params,
+			doc.Fields[clause.Field].Boost,
+		)
+	}
 
+	textFields := make(map[string]Field)
+	for name, field := range doc.Fields {
+		fm, ok := e.schema.Get(name)
+		if !ok || fm.Type == FieldTypeText {
+			textFields[name] = field
+		}
+	}
+	highlights := HighlightDoc(Document{ID: doc.ID, Fields: textFields}, terms, e.analyzer, HighlightMarkerOpen, HighlightMarkerClose)
+	return Result{ID: docID, Fields: doc.Fields, Score: totalScore, Highlights: highlights}, true
+}
+
+// applyPagination handles SearchAfter / From+Size / topK on an already-ordered result slice
+// and attaches NextCursor when a sort is active.
+func (e *Engine) applyPagination(result []Result, topK int, searchOpts *SearchOptions) SearchResult {
+	if searchOpts != nil && searchOpts.SearchAfter != nil {
+		cutIdx := -1
+		for i, r := range result {
+			if r.ID == searchOpts.SearchAfter.DocID {
+				cutIdx = i + 1
+				break
+			}
+		}
+		if cutIdx < 0 {
+			result = nil
+		} else {
+			result = result[cutIdx:]
+		}
 		if searchOpts.Size > 0 && len(result) > searchOpts.Size {
 			result = result[:searchOpts.Size]
 		}
@@ -208,16 +294,15 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 		result = result[:topK]
 	}
 
-	searchResult := SearchResult{Hits: result}
-	if searchOpts != nil && len(searchOpts.Sort) > 0 && len(searchResult.Hits) > 0 {
-		last := searchResult.Hits[len(searchResult.Hits)-1]
-		searchResult.NextCursor = &SearchCursor{
+	sr := SearchResult{Hits: result}
+	if searchOpts != nil && len(searchOpts.Sort) > 0 && len(sr.Hits) > 0 {
+		last := sr.Hits[len(sr.Hits)-1]
+		sr.NextCursor = &SearchCursor{
 			SortValue: last.Fields[searchOpts.Sort[0].Field].Value,
 			DocID:     last.ID,
 		}
 	}
-
-	return searchResult
+	return sr
 }
 
 // FuzzySearch finds all indexed terms within maxDistance of the query term
@@ -437,6 +522,52 @@ func (e *Engine) WildcardSearch(field, pattern string, topK int) []Result {
 	}
 
 	return result[:topK]
+}
+
+func (e *Engine) PrefixSearch(field, prefix string) []Result {
+	prefixWithField := field + ":" + prefix
+
+	resultString := e.index.PrefixSearch(prefixWithField)
+
+	result := make([]Result, 0)
+
+	duplicateDocIDs := make(map[string]bool)
+
+	for _, term := range resultString {
+		positing := e.index.Lookup(term)
+		for _, post := range positing {
+			resolvedID := post.DocID
+
+			if duplicateDocIDs[resolvedID] {
+				continue
+			}
+			duplicateDocIDs[resolvedID] = true
+
+			rawDocument, exists := e.docStorage.Get(resolvedID) // ensure the document exists
+			if !exists {
+				continue
+			}
+
+			var doc Document
+			if err := doc.UnmarshalJSON(rawDocument); err != nil {
+				continue
+			}
+
+			sc := scoring.Score(
+				float64(post.Frequency),
+				e.docLengths[resolvedID+":"+field],
+				0, // avgDocLen is not used for prefix search
+				e.index.DocCount(),
+				len(e.index.Lookup(term)),
+				e.bm25Params,
+				doc.Fields[field].Boost,
+			)
+
+			result = append(result, Result{ID: resolvedID, Fields: doc.Fields, Score: sc})
+		}
+	}
+
+	return result
 }
 
 func (e *Engine) matchingTerm(field string, re *regexp.Regexp) []string {

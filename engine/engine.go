@@ -176,21 +176,33 @@ func (e *Engine) Index(doc Document) error {
 
 		if fm.Index {
 			switch fm.Type {
-			case FieldTypeKeyword, FieldTypeInteger, FieldTypeFloat, FieldTypeBoolean:
-				// index the raw value as a single token — no analysis
+			case FieldTypeInteger:
 				e.index.AddRaw(doc.ID, fieldName, field.Value)
-				switch fm.Type {
-				case FieldTypeInteger:
-					if intValue, err := strconv.ParseInt(field.Value, 10, 64); err == nil {
-						e.index.AddNumericInt(fieldName, doc.ID, intValue)
-					}
-				case FieldTypeFloat:
-					if floatValue, err := strconv.ParseFloat(field.Value, 64); err == nil {
-						e.index.AddNumeric(fieldName, doc.ID, floatValue)
-					}
+				if intValue, err := strconv.ParseInt(field.Value, 10, 64); err == nil {
+					e.index.AddNumericInt(fieldName, doc.ID, intValue)
+					e.index.AddFieldValue(fieldName, doc.ID, field.Value, true)
 				}
+			case FieldTypeFloat:
+				e.index.AddRaw(doc.ID, fieldName, field.Value)
+				if floatValue, err := strconv.ParseFloat(field.Value, 64); err == nil {
+					e.index.AddNumeric(fieldName, doc.ID, floatValue)
+					e.index.AddFieldValue(fieldName, doc.ID, field.Value, true)
+				}
+			case FieldTypeBoolean:
+				e.index.AddRaw(doc.ID, fieldName, field.Value)
+				if boolValue, err := strconv.ParseBool(field.Value); err == nil {
+					intVal := int64(0)
+					if boolValue {
+						intVal = 1
+					}
+					e.index.AddNumericInt(fieldName, doc.ID, intVal)
+				}
+			case FieldTypeKeyword:
+				e.index.AddRaw(doc.ID, fieldName, field.Value)
+				e.index.AddFieldValue(fieldName, doc.ID, field.Value, false)
 			case FieldTypeText:
 				e.index.Add(doc.ID, field.Value, &fieldName, e.analyzer)
+				e.index.AddFieldValue(fieldName, doc.ID, field.Value, false)
 			}
 		}
 
@@ -226,6 +238,7 @@ func (e *Engine) Delete(id string) {
 	}
 	e.index.Delete(id)
 	e.index.DeleteNumeric(id)
+	e.index.DeleteFieldValues(id)
 	e.docStorage.Delete(id)
 }
 
@@ -272,52 +285,6 @@ func (e *Engine) expandQueryWithSynonyms(q query.Query) query.Query {
 	}
 
 	return query.Query{Clauses: expandedClauses}
-}
-
-func (e *Engine) PrefixSearch(field, prefix string) []Result {
-	prefixWithField := field + ":" + prefix
-
-	resultString := e.index.PrefixSearch(prefixWithField)
-
-	result := make([]Result, 0)
-
-	duplicateDocIDs := make(map[string]bool)
-
-	for _, term := range resultString {
-		positing := e.index.Lookup(term)
-		for _, post := range positing {
-			resolvedID := post.DocID
-
-			if duplicateDocIDs[resolvedID] {
-				continue
-			}
-			duplicateDocIDs[resolvedID] = true
-
-			rawDocument, exists := e.docStorage.Get(resolvedID) // ensure the document exists
-			if !exists {
-				continue
-			}
-
-			var doc Document
-			if err := doc.UnmarshalJSON(rawDocument); err != nil {
-				continue
-			}
-
-			sc := scoring.Score(
-				float64(post.Frequency),
-				e.docLengths[resolvedID+":"+field],
-				0, // avgDocLen is not used for prefix search
-				e.index.DocCount(),
-				len(e.index.Lookup(term)),
-				e.bm25Params,
-				doc.Fields[field].Boost,
-			)
-
-			result = append(result, Result{ID: resolvedID, Fields: doc.Fields, Score: sc})
-		}
-	}
-
-	return result
 }
 
 // IndexStruct indexes any struct annotated with `search` tags.
