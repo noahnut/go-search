@@ -26,7 +26,7 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Dynamic mapping** — engine infers field types automatically from values; schema is locked on first write and survives snapshots
 - **Range queries** — filter numeric fields with `>=`, `<=`, `>`, `<` bounds
 - **Terms query** — multi-value exact filter (`WHERE field IN (...)`)
-- **Sorting** — sort results by any field (numeric or string), ascending or descending; BM25 score as tiebreaker
+- **Sorting** — sort results by any field (numeric or string), ascending or descending; BM25 score as tiebreaker; numeric and keyword fields use an in-memory column store so sort queries fetch from storage only for the final result window
 - **Pagination** — offset (`From`/`Size`) and cursor-based (`SearchAfter`) pagination; `NextCursor` returned with every page
 - **Stop words** — built-in English preset; extend or replace with custom word lists
 
@@ -179,6 +179,11 @@ Unlike `Should`, `Terms` is a hard filter and does not affect BM25 score.
 By default results are ranked by BM25 score. Pass `SortBy` to sort by a field value instead.
 Numeric fields are compared numerically; string fields are compared lexicographically.
 Documents with equal sort values use BM25 score as tiebreaker.
+
+When sorting by a numeric or keyword field the engine uses a sort-first path: it walks
+a pre-sorted in-memory column store (doc values) and fetches from storage only for documents
+in the result window. Storage reads drop from O(candidates) to O(topK).
+Documents missing the sort field are always appended at the end, sorted by BM25 score.
 
 ```go
 // Sort by price ascending
@@ -593,6 +598,7 @@ err = e.Reindex(8, engine.WithAnalyzer(newAnalyzer))
 ```
 analysis/        tokenizer + filters + analyzer pipeline + synonym maps
 index/           segment-based inverted index (term → posting list) + trie for prefix search
+                 + FieldIndex: in-memory column store (doc values) for sort and range
 scoring/         BM25 relevance ranking
 query/           boolean query builder and matching logic
 storage/         Storage interface + in-memory implementation
