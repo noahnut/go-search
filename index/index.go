@@ -65,12 +65,13 @@ type Index struct {
 	flushSize   int                 // flush buffer → segment when buffer hits this
 	flushPolicy FlushPolicy
 	mergePolicy MergePolicy
-	docCount    int           // total number of unique documents in the index
-	tokenCount  int           // total number of tokens in the index
-	merging     atomic.Int32  // 0 = idle, 1 = in progress
-	numeric     *NumericIndex // numeric index
-	fieldIndex  *FieldIndex   // field index
-	stopFlush   chan struct{} // closed by StopFlushTimer
+	docCount    int          // total number of unique documents in the index
+	tokenCount  int          // total number of tokens in the index
+	merging     atomic.Int32 // 0 = idle, 1 = in progress
+	kd          *KDTree
+	kdEntries   map[string]KDEntry // accumulate per-doc values before Build
+	fieldIndex  *FieldIndex        // field index
+	stopFlush   chan struct{}      // closed by StopFlushTimer
 }
 
 // NewWithFlushSize creates an index that flushes every n documents.
@@ -105,7 +106,8 @@ func New(storage storage.Storage, opts ...Option) *Index {
 		mergePolicy: defaultMergePolicy,
 		docCount:    0,
 		merging:     atomic.Int32{},
-		numeric:     NewNumericIndex(storage),
+		kd:          NewKDTree(),
+		kdEntries:   make(map[string]KDEntry),
 		fieldIndex:  NewFieldIndex(),
 	}
 
@@ -333,12 +335,19 @@ func (idx *Index) Flush() {
 	idx.buffer = make(map[string]map[string]Posting)
 	idx.bufferDocs = make(map[string]struct{})
 
+	entries := make([]KDEntry, 0, len(idx.kdEntries))
+	for _, e := range idx.kdEntries {
+		entries = append(entries, e)
+	}
+	if len(entries) > 0 {
+		idx.kd.Build(entries)
+	}
+
 	if idx.mergePolicy.MaxSegments > 0 && len(idx.segments) > idx.mergePolicy.MaxSegments {
 		if idx.merging.CompareAndSwap(0, 1) {
 			go func() {
 				defer idx.merging.Store(0)
 				idx.Merge()
-				idx.FlushNumeric()
 			}()
 		}
 	}
@@ -449,20 +458,71 @@ func (idx *Index) clearTombstone(docID string) {
 }
 
 func (idx *Index) AddNumeric(field, docID string, value float64) {
-	idx.numeric.AddFloat(field, docID, value)
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	entry := idx.kdEntries[docID]
+	entry.DocID = docID
+	if entry.Values == nil {
+		entry.Values = make(map[string]float64)
+	}
+	entry.Values[field] = value
+	idx.kdEntries[docID] = entry
 }
 
 func (idx *Index) AddNumericInt(field, docID string, value int64) {
-	idx.numeric.AddInt(field, docID, value)
+	idx.AddNumeric(field, docID, float64(value))
 }
 func (idx *Index) DeleteNumeric(docID string) {
-	idx.numeric.Delete(docID)
+	idx.mu.Lock()
+	delete(idx.kdEntries, docID)
+	idx.mu.Unlock()
+
+	idx.kd.Delete(docID)
 }
-func (idx *Index) FlushNumeric() {
-	idx.numeric.Flush()
-}
+
+// RangeQuery is a single-bound wrapper around MultiRangeQuery.
 func (idx *Index) RangeQuery(field string, gte, lte, gt, lt *float64) []string {
-	return idx.numeric.Range(field, gte, lte, gt, lt)
+	return idx.MultiRangeQuery([]FieldBound{{Field: field, Gte: gte, Lte: lte, Gt: gt, Lt: lt}})
+}
+
+// MultiRangeQuery returns docIDs matching all bounds simultaneously.
+// Uses the KD tree when available; falls back to linear scan of kdEntries
+// for queries that arrive before the first Flush().
+func (idx *Index) MultiRangeQuery(bounds []FieldBound) []string {
+	if idx.kd.IsBuilt() {
+		return idx.kd.MultiRange(bounds)
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	var result []string
+	for _, entry := range idx.kdEntries {
+		if kdEntryMatchesBounds(entry, bounds) {
+			result = append(result, entry.DocID)
+		}
+	}
+	return result
+}
+
+func kdEntryMatchesBounds(entry KDEntry, bounds []FieldBound) bool {
+	for _, b := range bounds {
+		val, ok := entry.Values[b.Field]
+		if !ok {
+			return false
+		}
+		if b.Gte != nil && val < *b.Gte {
+			return false
+		}
+		if b.Lte != nil && val > *b.Lte {
+			return false
+		}
+		if b.Gt != nil && val <= *b.Gt {
+			return false
+		}
+		if b.Lt != nil && val >= *b.Lt {
+			return false
+		}
+	}
+	return true
 }
 
 func (idx *Index) AddFieldValue(field, docID, rawValue string, isNumeric bool) {

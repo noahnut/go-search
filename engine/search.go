@@ -3,7 +3,6 @@ package engine
 import (
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/noahfan/go-search/analysis"
@@ -46,10 +45,8 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 	candidateDocs := make(map[string]map[string]index.Posting)
 
 	if len(q.Clauses) == 0 && len(q.Ranges) > 0 {
-		for _, rc := range q.Ranges {
-			for _, docID := range e.index.RangeQuery(rc.Field, rc.Gte, rc.Lte, rc.Gt, rc.Lt) {
-				candidateDocs[docID] = map[string]index.Posting{}
-			}
+		for _, docID := range e.index.MultiRangeQuery(rangesToFieldBounds(q.Ranges)) {
+			candidateDocs[docID] = map[string]index.Posting{}
 		}
 	}
 
@@ -74,6 +71,19 @@ func (e *Engine) Search(q query.Query, topK int, opts ...SearchOptions) SearchRe
 					candidateDocs[posting.DocID] = make(map[string]index.Posting)
 				}
 				candidateDocs[posting.DocID][clause.Field+":"+clause.Term] = posting
+			}
+		}
+	}
+
+	// Pre-filter text candidates by range using KDTree to reduce Bitcask reads.
+	if len(q.Ranges) > 0 && len(q.Clauses) > 0 && len(candidateDocs) > 0 {
+		rangeSet := make(map[string]struct{})
+		for _, docID := range e.index.MultiRangeQuery(rangesToFieldBounds(q.Ranges)) {
+			rangeSet[docID] = struct{}{}
+		}
+		for docID := range candidateDocs {
+			if _, ok := rangeSet[docID]; !ok {
+				delete(candidateDocs, docID)
 			}
 		}
 	}
@@ -212,9 +222,6 @@ func (e *Engine) scoreDoc(docID string, postings map[string]index.Posting, q que
 	}
 	var doc Document
 	if err := doc.UnmarshalJSON(rawDoc); err != nil {
-		return Result{}, false
-	}
-	if !passesRangeFilters(doc, q.Ranges) {
 		return Result{}, false
 	}
 	if !passTermsFilters(doc, q.Terms) {
@@ -616,31 +623,14 @@ func wildcardToRegexp(pattern string) *regexp.Regexp {
 	return regexp.MustCompile(b.String())
 }
 
-func passesRangeFilters(doc Document, ranges []query.RangeClause) bool {
-	for _, rc := range ranges {
-		field, ok := doc.Fields[rc.Field]
-		if !ok {
-			return false // field absent → exclude
-		}
-		val, err := strconv.ParseFloat(field.Value, 64)
-		if err != nil {
-			return false // non-numeric → exclude
-		}
-		if rc.Gte != nil && val < *rc.Gte {
-			return false
-		}
-		if rc.Lte != nil && val > *rc.Lte {
-			return false
-		}
-		if rc.Gt != nil && val <= *rc.Gt {
-			return false
-		}
-		if rc.Lt != nil && val >= *rc.Lt {
-			return false
-		}
+func rangesToFieldBounds(ranges []query.RangeClause) []index.FieldBound {
+	bounds := make([]index.FieldBound, len(ranges))
+	for i, rc := range ranges {
+		bounds[i] = index.FieldBound{Field: rc.Field, Gte: rc.Gte, Lte: rc.Lte, Gt: rc.Gt, Lt: rc.Lt}
 	}
-	return true
+	return bounds
 }
+
 
 func passRegexFilters(doc Document, regexes []query.RegexClause) bool {
 	for _, rc := range regexes {
