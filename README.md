@@ -24,7 +24,7 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Struct tag indexing** — annotate your own structs with `search:` tags; no manual `Document{}` construction
 - **Field mappings** — declare each field as `text` (analyzed), `keyword` (exact match), or `skip` (not indexed); control `index` and `store` independently
 - **Dynamic mapping** — engine infers field types automatically from values; schema is locked on first write and survives snapshots
-- **Range queries** — filter numeric fields with `>=`, `<=`, `>`, `<` bounds
+- **Range queries** — filter numeric fields with `>=`, `<=`, `>`, `<` bounds; multi-field range queries are resolved with a single in-memory KD tree traversal (bounding-box pruning) instead of per-field scans; mixed text + range queries pre-filter candidates before any storage read
 - **Terms query** — multi-value exact filter (`WHERE field IN (...)`)
 - **Sorting** — sort results by any field (numeric or string), ascending or descending; BM25 score as tiebreaker; numeric and keyword fields use an in-memory column store so sort queries fetch from storage only for the final result window
 - **Pagination** — offset (`From`/`Size`) and cursor-based (`SearchAfter`) pagination; `NextCursor` returned with every page
@@ -137,7 +137,8 @@ for _, r := range sr.Hits {
 ### Range queries
 
 Filter documents where a numeric field falls within given bounds. All bounds are optional
-(nil = unbounded). Combine with `Must` to narrow a text search.
+(nil = unbounded). Combine with `Must` to narrow a text search, or chain multiple `Range`
+calls to filter on several fields simultaneously.
 
 ```go
 // 10 <= price <= 100
@@ -152,10 +153,22 @@ q := query.NewBuilder().
     Range("score", query.Ptr(4.5), nil).
     Build()
 
+// Multi-field range: both conditions must be satisfied simultaneously.
+// Resolved with a single KD tree traversal — more efficient than intersecting
+// two independent range results.
+q := query.NewBuilder().
+    Range("price", query.Ptr(10), query.Ptr(100)).
+    Range("rating", query.Ptr(4.0), nil).
+    Build()
+
 sr := e.Search(q, 10)
 ```
 
 `query.Ptr(v)` is a convenience helper that returns a `*float64`.
+
+When combined with `Must` (text + range), the engine resolves range candidates first
+and intersects with text candidates in memory — storage reads happen only for documents
+that pass both filters.
 
 ### Terms query
 
@@ -598,7 +611,8 @@ err = e.Reindex(8, engine.WithAnalyzer(newAnalyzer))
 ```
 analysis/        tokenizer + filters + analyzer pipeline + synonym maps
 index/           segment-based inverted index (term → posting list) + trie for prefix search
-                 + FieldIndex: in-memory column store (doc values) for sort and range
+                 + KDTree: in-memory multi-dimensional numeric index for range queries
+                 + FieldIndex: in-memory column store (doc values) for sort
 scoring/         BM25 relevance ranking
 query/           boolean query builder and matching logic
 storage/         Storage interface + in-memory implementation
