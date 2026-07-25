@@ -18,10 +18,12 @@ import (
 	"github.com/noahfan/go-search/scoring"
 	"github.com/noahfan/go-search/storage"
 	"github.com/noahfan/go-search/storage/memory"
+	"github.com/noahfan/go-search/wal"
 )
 
 const DefaultLargeDocThreshold = 64 * 1024 // 64 KB
 const SnapshotFileName = "snapshot.gob"
+const WALFileName = "wal.log"
 
 const HighlightMarkerOpen = "<em>"
 const HighlightMarkerClose = "</em>"
@@ -79,6 +81,8 @@ type Engine struct {
 	analyzer          *analysis.Analyzer
 	docStorage        storage.Storage                 // key-value storage for large documents
 	vectors           map[string]map[string][]float64 // docID → fieldName → vector
+	wal               *wal.WAL
+	walDir            string
 	snapshotDir       string
 	snapshotInterval  time.Duration
 	largeDocThreshold int
@@ -100,6 +104,8 @@ func newBase(opts ...Option) *Engine {
 		analyzer:          analysis.NewAnalyzer(&analysis.StandardTokenizer{}),
 		vectors:           make(map[string]map[string][]float64),
 		docLengths:        make(map[string]int),
+		wal:               nil,
+		walDir:            "",
 		schema:            NewSchema(),
 		largeDocThreshold: DefaultLargeDocThreshold,
 		bm25Params:        scoring.DefaultParams(),
@@ -112,6 +118,17 @@ func newBase(opts ...Option) *Engine {
 	}
 
 	e.index = index.New(e.docStorage, index.WithFlushPolicy(e.flushPolicy), index.WithMergePolicy(e.mergePolicy))
+	var err error
+
+	if e.walDir != "" {
+		if err := os.MkdirAll(e.walDir, 0755); err != nil {
+			fmt.Printf("Error creating WAL directory: %v\n", err)
+		}
+		e.wal, err = wal.Open(walPath(e.walDir))
+		if err != nil {
+			fmt.Printf("Error opening WAL: %v\n", err)
+		}
+	}
 
 	if e.docStorage == nil {
 		e.docStorage = memory.New()
@@ -135,6 +152,12 @@ func New(opts ...Option) *Engine {
 		if err := e.recoverDelta(); err != nil {
 			fmt.Printf("Error recovering delta: %v\n", err)
 		}
+
+		if e.wal != nil {
+			if err := e.replayWAL(walPath(e.walDir)); err != nil {
+				fmt.Printf("Error replaying WAL: %v\n", err)
+			}
+		}
 	}
 
 	if e.snapshotDir != "" && e.snapshotInterval > 0 {
@@ -152,11 +175,26 @@ func (e *Engine) Index(doc Document) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if e.wal != nil {
+		entry := wal.Entry{
+			Op:     wal.OpIndex,
+			DocID:  doc.ID,
+			Fields: fieldsToMap(doc),
+		}
+		if err := e.wal.Append(entry); err != nil {
+			return err
+		}
+	}
+
 	if e.docStorage.Has(doc.ID) {
 		e.index.Delete(doc.ID)
 		e.docStorage.Delete(doc.ID)
 	}
 
+	return e.indexInternal(doc)
+}
+
+func (e *Engine) indexInternal(doc Document) error {
 	tempDocument := Document{ID: doc.ID, Fields: make(map[string]Field)}
 
 	for fieldName, field := range doc.Fields {
@@ -231,6 +269,21 @@ func (e *Engine) Index(doc Document) error {
 func (e *Engine) Delete(id string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	if e.wal != nil {
+		entry := wal.Entry{
+			Op:    wal.OpDelete,
+			DocID: id,
+		}
+		if err := e.wal.Append(entry); err != nil {
+			fmt.Printf("Error appending delete to WAL: %v\n", err)
+		}
+	}
+
+	e.deleteInternal(id)
+}
+
+func (e *Engine) deleteInternal(id string) {
 	for k := range e.docLengths {
 		if strings.HasPrefix(k, id+":") {
 			delete(e.docLengths, k)
@@ -462,4 +515,23 @@ func (e *Engine) periodicSnapshot() {
 			}
 		}
 	}()
+}
+
+func fieldsToMap(d Document) map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range d.Fields {
+		fieldMap := map[string]interface{}{
+			"value": v.Value,
+			"boost": v.Boost,
+		}
+		if v.Vector != nil {
+			fieldMap["vector"] = v.Vector
+		}
+		result[k] = fieldMap
+	}
+	return result
+}
+
+func walPath(dir string) string {
+	return filepath.Join(dir, WALFileName)
 }

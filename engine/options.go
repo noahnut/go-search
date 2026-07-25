@@ -78,3 +78,9 @@ func WithMergePolicy(p index.MergePolicy) Option {
 		e.mergePolicy = &p
 	}
 }
+
+func WithWAL(dir string) Option {
+	return func(e *Engine) {
+		e.walDir = dir
+	}
+}

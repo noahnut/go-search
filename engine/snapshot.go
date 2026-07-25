@@ -8,6 +8,7 @@ import (
 
 	"github.com/noahfan/go-search/index"
 	"github.com/noahfan/go-search/scoring"
+	"github.com/noahfan/go-search/wal"
 )
 
 type snapshot struct {
@@ -65,7 +66,15 @@ func (e *Engine) Save(path string) error {
 	}
 	defer f.Close()
 
+	defer f.Sync() // ensure data is written to disk
+	defer func() {
+		if e.wal != nil {
+			e.wal.Truncate() // clear the WAL after a successful snapshot
+		}
+	}()
+
 	encoder := gob.NewEncoder(f)
+
 	return encoder.Encode(data)
 }
 
@@ -133,4 +142,29 @@ func (e *Engine) recoverDelta() error {
 	})
 
 	return nil
+}
+
+func (e *Engine) replayWAL(walPath string) error {
+	return wal.Replay(walPath, func(entry wal.Entry) {
+		switch entry.Op {
+		case wal.OpIndex:
+			doc := entryToDocument(entry)
+			e.indexInternal(doc) // same as Index() but without WAL write
+		case wal.OpDelete:
+			e.deleteInternal(entry.DocID)
+		}
+	})
+}
+
+func entryToDocument(entry wal.Entry) Document {
+	doc := Document{ID: entry.DocID, Fields: make(map[string]Field)}
+	for fieldName, raw := range entry.Fields {
+		fm, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		val, _ := fm["value"].(string)
+		doc.Fields[fieldName] = Field{Value: val}
+	}
+	return doc
 }
