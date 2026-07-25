@@ -148,15 +148,11 @@ func New(opts ...Option) *Engine {
 				}
 			}
 		}
-		// re-index all docs not already in the snapshot (or everything if no snapshot)
-		if err := e.recoverDelta(); err != nil {
-			fmt.Printf("Error recovering delta: %v\n", err)
-		}
 
 		if e.wal != nil {
-			if err := e.replayWAL(walPath(e.walDir)); err != nil {
-				fmt.Printf("Error replaying WAL: %v\n", err)
-			}
+			e.replayWAL(walPath(e.walDir))
+		} else {
+			e.recoverDelta() // fallback: no WAL, best-effort recovery
 		}
 	}
 

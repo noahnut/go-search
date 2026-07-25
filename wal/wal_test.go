@@ -178,3 +178,21 @@ func TestWAL_Sync(t *testing.T) {
 		t.Errorf("Sync: %v", err)
 	}
 }
+
+// TestWAL_EmptyFile verifies Replay on an empty file returns nil error and zero entries.
+func TestWAL_EmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.log")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	var count int
+	if err := Replay(path, func(Entry) { count++ }); err != nil {
+		t.Errorf("expected nil error on empty file, got: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 entries from empty file, got %d", count)
+	}
+}

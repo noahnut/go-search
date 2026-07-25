@@ -149,6 +149,9 @@ func (e *Engine) replayWAL(walPath string) error {
 		switch entry.Op {
 		case wal.OpIndex:
 			doc := entryToDocument(entry)
+			if e.docStorage.Has(doc.ID) {
+				e.deleteInternal(doc.ID)
+			}
 			e.indexInternal(doc) // same as Index() but without WAL write
 		case wal.OpDelete:
 			e.deleteInternal(entry.DocID)

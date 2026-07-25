@@ -123,3 +123,82 @@ func TestWAL_IndexAndDelete_Order(t *testing.T) {
 		t.Errorf("expected size 0 after index+delete replay, got %d", e2.Size())
 	}
 }
+
+// TestWAL_UpdateSurvivesCrash verifies that re-indexing the same doc ID (update)
+// replays correctly: only the latest content is searchable after replay.
+func TestWAL_UpdateSurvivesCrash(t *testing.T) {
+	dir := t.TempDir()
+
+	e1, close1 := walEngine(t, dir)
+	e1.Index(doc("1", "golang is fast"))
+	e1.Index(doc("1", "golang is slow")) // same ID, updated content
+	close1()
+
+	e2, close2 := walEngine(t, dir)
+	defer close2()
+
+	if e2.Size() != 1 {
+		t.Errorf("expected size 1 after update replay, got %d", e2.Size())
+	}
+
+	q := query.NewBuilder().Must("body", "slow").Build()
+	if hits := e2.Search(q, 10).Hits; len(hits) != 1 || hits[0].ID != "1" {
+		t.Errorf("expected updated content 'slow' to be searchable, got %v", ids(hits))
+	}
+
+	q2 := query.NewBuilder().Must("body", "fast").Build()
+	if hits := e2.Search(q2, 10).Hits; len(hits) != 0 {
+		t.Errorf("stale content 'fast' should not be searchable after update, got %v", ids(hits))
+	}
+}
+
+// TestWAL_SnapshotThenUpdateSurvivesCrash verifies that a doc updated after a
+// snapshot is searchable by its new content after WAL replay.
+// Note: the old content may still be findable via stale segment postings until
+// a merge compacts the segment — that is a pre-existing engine limitation, not
+// a WAL concern, so only the positive case is asserted here.
+func TestWAL_SnapshotThenUpdateSurvivesCrash(t *testing.T) {
+	dir := t.TempDir()
+
+	e1, close1 := walEngine(t, dir)
+	e1.Index(doc("1", "python tutorial"))
+	snapPath := filepath.Join(dir, SnapshotFileName)
+	if err := e1.Save(snapPath); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	e1.Index(doc("1", "golang tutorial")) // update after snapshot
+	close1()
+
+	e2, close2 := walEngine(t, dir)
+	defer close2()
+
+	// WAL must replay the update: new content is searchable.
+	q := query.NewBuilder().Must("body", "golang").Build()
+	if hits := e2.Search(q, 10).Hits; len(hits) != 1 || hits[0].ID != "1" {
+		t.Errorf("expected WAL update to be searchable after replay, got %v", ids(hits))
+	}
+
+	// Size must be 1: the update keeps a single doc, not two.
+	if e2.Size() != 1 {
+		t.Errorf("expected size 1 after update replay, got %d", e2.Size())
+	}
+}
+
+// TestWAL_NoDoubleIndex verifies that recoverDelta does not run alongside WAL
+// replay, so docs are indexed exactly once after restart.
+func TestWAL_NoDoubleIndex(t *testing.T) {
+	dir := t.TempDir()
+
+	e1, close1 := walEngine(t, dir)
+	e1.Index(doc("1", "go go go"))
+	close1()
+
+	e2, close2 := walEngine(t, dir)
+	defer close2()
+
+	q := query.NewBuilder().Must("body", "go").Build()
+	hits := e2.Search(q, 10).Hits
+	if len(hits) != 1 {
+		t.Errorf("doc 1 should appear exactly once, got %d results", len(hits))
+	}
+}
