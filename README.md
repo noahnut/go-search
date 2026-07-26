@@ -16,7 +16,7 @@ Runs entirely inside the caller's Go process — no external service, no network
 - **Segment-based index** with O(1) deletes via tombstones
 - **Concurrent segment search** — immutable segments searched in parallel
 - **Segment merging** — collapse segments and permanently drop deleted documents
-- **Persistence** — append-only WAL for document durability; gob snapshots for fast startup; automatic delta recovery on restart
+- **Persistence** — write-ahead log (WAL) records every mutation before it takes effect; crash recovery replays the WAL from the last snapshot checkpoint; gob snapshots for fast startup; WAL truncated after each snapshot to stay bounded
 - **Prefix search / autocomplete** — trie-backed, returns all docs whose terms start with a prefix
 - **Wildcard search** — `*` (any sequence) and `?` (single char) matched against indexed terms; BM25-ranked
 - **Regex query** — filter documents where a field value matches a Go regular expression
@@ -502,12 +502,12 @@ are never conflict-checked against inferred types.
 ### Persistence
 
 By default the engine is in-memory and state is lost when the process exits.
-For durability, wire up a local document store and optionally a snapshot directory.
+For durability, combine a local document store, a write-ahead log, and optionally snapshots.
 
-**Document store (WAL)**
+**Document store**
 
-The document store is an append-only log that survives restarts. On startup the
-engine replays it to rebuild the inverted index automatically.
+The document store (Bitcask-style key-value log) holds the raw document content.
+It is the source for `Search` results and for rebuilding the index on restart.
 
 ```go
 import "github.com/noahfan/go-search/storage/local"
@@ -520,36 +520,48 @@ e := engine.New(engine.WithDocStorage(store))
 e.Close() // flushes and closes the log
 ```
 
-On the next run, pass the same path and the engine restores all documents:
+**Write-Ahead Log (WAL)**
 
-```go
-store, err := local.New("data/docs.log")
-e := engine.New(engine.WithDocStorage(store)) // index rebuilt from log automatically
-```
-
-**Snapshots (faster startup)**
-
-For large indexes, replaying the full WAL on every startup is slow. Snapshots
-capture the inverted index at a point in time so startup only replays the delta
-(documents written after the last snapshot).
+Before each `Index` or `Delete`, the engine appends a record to an append-only log
+file. On restart after a crash, the WAL is replayed from the last snapshot checkpoint,
+reproducing every operation in order — including deletes, which the document store alone
+cannot recover.
 
 ```go
 store, err := local.New("data/docs.log")
 e := engine.New(
     engine.WithDocStorage(store),
+    engine.WithWAL("data/"),   // WAL written to data/wal.log
+)
+```
+
+After each successful `Snapshot()` the WAL is truncated automatically — it only needs to
+cover operations since the last snapshot. Without `WithWAL`, the engine falls back to
+scanning the document store for unindexed documents, which cannot recover deletes.
+
+**Snapshots (faster startup)**
+
+For large indexes, replaying the full WAL on every startup is slow. Snapshots capture
+the inverted index at a point in time so startup only replays the delta (WAL entries
+written after the last snapshot).
+
+```go
+store, err := local.New("data/docs.log")
+e := engine.New(
+    engine.WithDocStorage(store),
+    engine.WithWAL("data/"),
     engine.WithSnapshotDir("data/snapshots"),          // where to write snapshot.gob
     engine.WithSnapshotInterval(5 * time.Minute),      // optional: snapshot on a timer
 )
 
-// Manual snapshot
+// Manual snapshot — also truncates the WAL
 err = e.Snapshot()
 
 // Close triggers a final snapshot automatically
 err = e.Close()
 ```
 
-On restart, the engine loads the snapshot and re-indexes only the documents that
-arrived after it was taken — the delta is recovered from the WAL. The schema is
+On restart the engine loads the snapshot and replays the WAL delta. The schema is
 also persisted in snapshots and restored on load.
 
 **Low-level save / load**
@@ -616,7 +628,8 @@ index/           segment-based inverted index (term → posting list) + trie for
 scoring/         BM25 relevance ranking
 query/           boolean query builder and matching logic
 storage/         Storage interface + in-memory implementation
-storage/local/   append-only WAL (Bitcask-style) for document durability
+storage/local/   Bitcask-style key-value log for document content
+wal/             write-ahead log — records every Index/Delete op; replayed after crash
 engine/          public SDK — Index, IndexStruct, Search, FuzzySearch, VectorSearch,
                               HybridSearch, PrefixSearch, WildcardSearch, Aggregate,
                               HighlightDoc, SortBy, Schema, Reindex, Snapshot, Save, Load, Close
